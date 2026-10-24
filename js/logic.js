@@ -94,9 +94,15 @@ export function fmtDate(t) {
 
 export const sum = (list) => list.reduce((s, r) => s + (r.amount || 0), 0);
 
+// 이 자녀가 받는 금액. 자녀별 금액(prices)이 있으면 그 값, 없으면 기본 금액.
+export const priceFor = (chore, childId) => chore.prices?.[childId] ?? chore.price;
+
+// 이 항목이 이 자녀 대상인지 (대상 자녀를 정하지 않았으면 모두)
+export const targetsChild = (chore, childId) => !chore.targets?.length || chore.targets.includes(childId);
+
 // 이 자녀에게 지금 보여 줄 항목인지 (숨김, 대상 자녀, 요일, 끝난 미션)
 export function choreVisibleTo(chore, childId, now = Date.now()) {
-  if (chore.hidden || (chore.targets?.length && !chore.targets.includes(childId))) return false;
+  if (chore.hidden || !targetsChild(chore, childId)) return false;
   if (choreKind(chore) === 'mission') return !chore.done;
   return !chore.days?.length || chore.days.includes(new Date(now).getDay());
 }

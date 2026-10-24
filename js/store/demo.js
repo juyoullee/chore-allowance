@@ -1,7 +1,7 @@
 // 체험 모드 저장소: Firebase 없이 이 브라우저의 localStorage에 저장한다.
 // 탭마다 다른 사람으로 로그인할 수 있어서, 탭 두 개로 부모와 자녀 흐름을 함께 확인할 수 있다.
 import {
-  DEFAULT_CHORES, newChore, approvalEffect, initialStatus, choreKind, isOverdue, settingsOf,
+  DEFAULT_CHORES, newChore, approvalEffect, initialStatus, choreKind, isOverdue, settingsOf, priceFor,
 } from '../logic.js';
 
 const KEY = 'chore-demo-v1';
@@ -173,7 +173,8 @@ export default {
       const kind = chore && choreKind(chore);
       const ok = chore && !chore.hidden && (req.type === 'duty'
         ? kind === 'duty' && req.amount === 0
-        : kind !== 'duty' && chore.price === req.amount && !(kind === 'mission' && (chore.done || isOverdue(chore))));
+        : kind !== 'duty' && priceFor(chore, req.childId) === req.amount
+          && !(kind === 'mission' && (chore.done || isOverdue(chore))));
       if (!ok) throw new Error('집안일 정보가 바뀌었어요. 다시 시도해 주세요.');
     }
     const id = newId();

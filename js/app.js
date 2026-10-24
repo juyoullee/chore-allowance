@@ -4,13 +4,13 @@ import {
   won, sum, fmtTime, fmtDate, startOfDay, startOfWeek, startOfMonth, addMonths, monthCells,
   todayCount, pendingPayoutSum, checkPayout, choreVisibleTo, errorMessage,
   KINDS, choreKind, missionRequest, isOverdue, dueLabel, dateInputToDue, dueToDateInput, goalProgress,
-  settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, serviceRecord,
+  settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, serviceRecord, priceFor, targetsChild,
 } from './logic.js';
 
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v2 (10/24)';
+const APP_VERSION = 'v3 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -484,9 +484,12 @@ const daysLabel = (days) => (days.length === 7 ? '매일' : [...days].sort().map
 
 function ChoresTab({ fid, chores, members }) {
   const [editing, setEditing] = useState(null);
+  const [who, setWho] = useState('all'); // 'all' 또는 자녀 id: 그 자녀에게 보이는 항목만
   const children = members.filter((m) => m.role === 'child');
   const nameOf = (id) => children.find((c) => c.id === id)?.name || '?';
-  const groups = Object.keys(KINDS).map((kind) => ({ kind, items: chores.filter((c) => choreKind(c) === kind) }));
+  const shown = who === 'all' ? chores : chores.filter((c) => targetsChild(c, who));
+  const groups = Object.keys(KINDS).map((kind) => ({ kind, items: shown.filter((c) => choreKind(c) === kind) }));
+  const hasPrices = (c) => Object.keys(c.prices || {}).length > 0;
 
   // 같은 종류 안에서 순서를 바꾸고, 전체 순서를 다시 저장한다.
   const move = (gi, i, dir) => {
@@ -501,9 +504,19 @@ function ChoresTab({ fid, chores, members }) {
   return html`
     <div class="section-head">
       <h2 class="section">집안일 관리</h2>
-      <button class="btn primary small" onClick=${() => setEditing({})}>+ 추가</button>
+      <button class="btn primary small" onClick=${() => setEditing(who === 'all' ? {} : { targets: [who] })}>+ 추가</button>
     </div>
-    <p class="hint">가격을 바꿔도 이미 승인된 기록과 대기 중인 요청은 원래 가격 그대로 처리돼요.</p>
+    ${children.length > 1 && html`
+      <div class="chips">
+        <button class=${`chip ${who === 'all' ? 'on' : ''}`} onClick=${() => setWho('all')}>전체</button>
+        ${children.map((c) => html`
+          <button class=${`chip ${who === c.id ? 'on' : ''}`} onClick=${() => setWho(c.id)}>${c.name}</button>`)}
+      </div>`}
+    <p class="hint">
+      ${who === 'all'
+        ? '가격을 바꿔도 이미 승인된 기록과 대기 중인 요청은 원래 가격 그대로 처리돼요.'
+        : `${nameOf(who)} 화면에 보이는 항목과 금액이에요. 여기서 추가하면 ${nameOf(who)} 전용 항목이 돼요.`}
+    </p>
     ${groups.map(({ kind, items }, gi) => html`
       <h3 class="day">${KINDS[kind].label} ${items.length}개</h3>
       ${!items.length && html`<p class="hint">${KINDS[kind].desc}</p>`}
@@ -519,15 +532,20 @@ function ChoresTab({ fid, chores, members }) {
                   <span class=${`tag ${c.done ? 'ok' : isOverdue(c) ? 'warn' : ''}`}>${c.done ? '완료' : dueLabel(c.dueAt)}</span>`}
                 ${kind !== 'mission' && c.days?.length > 0 && html`<span class="tag">${daysLabel(c.days)}</span>`}
                 ${kind === 'paid' && c.dailyLimit > 0 && html`<span class="tag">하루 ${c.dailyLimit}회</span>`}
-                ${c.targets?.length > 0 && html`<span class="tag">${c.targets.map(nameOf).join(', ')}</span>`}
+                ${c.targets?.length > 0 && html`<span class="tag">${c.targets.map(nameOf).join(', ')} 전용</span>`}
+                ${kind !== 'duty' && who === 'all' && hasPrices(c) && html`<span class="tag ok">자녀별 금액</span>`}
+                ${kind !== 'duty' && who !== 'all' && c.prices?.[who] != null && html`<span class="tag ok">개별 금액</span>`}
               </div>
             </div>
-            <div class="price">${kind === 'duty' ? html`<span class="muted small">무급</span>` : won(c.price)}</div>
+            <div class="price">
+              ${kind === 'duty' ? html`<span class="muted small">무급</span>` : won(who === 'all' ? c.price : priceFor(c, who))}
+            </div>
           </button>
-          <div class="order-btns">
-            <button class="icon-btn" disabled=${i === 0} onClick=${() => move(gi, i, -1)} aria-label="위로">▲</button>
-            <button class="icon-btn" disabled=${i === items.length - 1} onClick=${() => move(gi, i, 1)} aria-label="아래로">▼</button>
-          </div>
+          ${who === 'all' && html`
+            <div class="order-btns">
+              <button class="icon-btn" disabled=${i === 0} onClick=${() => move(gi, i, -1)} aria-label="위로">▲</button>
+              <button class="icon-btn" disabled=${i === items.length - 1} onClick=${() => move(gi, i, 1)} aria-label="아래로">▼</button>
+            </div>`}
         </div>`)}`)}
     ${editing && html`
       <${ChoreEditor} fid=${fid} chore=${editing} children=${children} count=${chores.length}
@@ -543,26 +561,40 @@ function ChoreEditor({ fid, chore, children, count, onClose }) {
     ...chore,
     kind: choreKind(chore),
     due: dueToDateInput(isNew ? Date.now() + 7 * 86400000 : chore.dueAt),
+    // 자녀별 금액은 입력칸 값(문자열)으로 다룬다. 비어 있으면 기본 금액.
+    prices: Object.fromEntries(Object.entries(chore.prices || {}).map(([id, v]) => [id, String(v)])),
   });
   const set = (k, v) => setF((prev) => ({ ...prev, [k]: v }));
+  const setPrice = (id, v) => setF((prev) => ({ ...prev, prices: { ...prev.prices, [id]: v } }));
   const toggle = (k, v) => setF((prev) => ({
     ...prev, [k]: prev[k].includes(v) ? prev[k].filter((x) => x !== v) : [...prev[k], v],
   }));
   const { kind } = f;
+  // 자녀별 금액을 정할 수 있는 자녀 (대상 자녀를 정했으면 그 자녀들만)
+  const priceKids = children.filter((c) => !f.targets.length || f.targets.includes(c.id));
 
   const save = async () => {
     const price = kind === 'duty' ? 0 : Number(f.price);
     const dailyLimit = kind === 'paid' ? Number(f.dailyLimit) || 0 : 0;
+    const validPrice = (n) => Number.isInteger(n) && n >= 10 && n <= 1000000;
     if (!f.name.trim()) return toast('집안일 이름을 입력해 주세요.');
-    if (kind !== 'duty' && (!Number.isInteger(price) || price < 10 || price > 1000000)) {
-      return toast('금액은 10원~1,000,000원 사이의 정수로 입력해 주세요.');
-    }
+    if (kind !== 'duty' && !validPrice(price)) return toast('금액은 10원~1,000,000원 사이의 정수로 입력해 주세요.');
     if (!Number.isInteger(dailyLimit) || dailyLimit < 0) return toast('하루 횟수는 0 이상의 정수로 입력해 주세요.');
+    const prices = {};
+    if (kind !== 'duty') {
+      for (const c of priceKids) {
+        const v = String(f.prices[c.id] ?? '').trim();
+        if (!v) continue;
+        if (!validPrice(Number(v))) return toast(`${c.name}의 금액은 10원~1,000,000원 사이의 정수로 입력해 주세요.`);
+        if (Number(v) !== price) prices[c.id] = Number(v);
+      }
+    }
     const data = {
       kind,
       emoji: f.emoji.trim() || '✅',
       name: f.name.trim(),
       price,
+      prices,
       desc: f.desc.trim(),
       dailyLimit,
       days: kind === 'mission' ? [] : f.days,
@@ -609,6 +641,16 @@ function ChoreEditor({ fid, chore, children, count, onClose }) {
               <button class="chip" onClick=${() => set('price', (Number(f.price) || 0) + n)}>+${n.toLocaleString()}</button>`)}
           </div>
         </label>`}
+      ${kind !== 'duty' && priceKids.length > 1 && html`
+        <div class="field">자녀별 금액 (비워 두면 위의 기본 금액)
+          ${priceKids.map((c) => html`
+            <div class="price-row" key=${c.id}>
+              <span>${c.name}</span>
+              <input type="number" inputmode="numeric" min="10" step="100" placeholder=${`${Number(f.price) || 0}`}
+                value=${f.prices[c.id] ?? ''} onInput=${(e) => setPrice(c.id, e.target.value)} />
+              <span class="muted small">원</span>
+            </div>`)}
+        </div>`}
       <label class="field">설명 (선택)
         <input maxlength="50" placeholder="예: 그릇을 닦고 건조대에 정리" value=${f.desc}
           onInput=${(e) => set('desc', e.target.value)} />
@@ -1158,7 +1200,7 @@ function ChildHome({ fid, me, chores, requests, family }) {
               ${c.desc && html`<div class="muted small">${c.desc}</div>`}
             </div>
             <div class="mission-side">
-              <div class="price">${won(c.price)}</div>
+              <div class="price">${won(priceFor(c, me.id))}</div>
               <span class=${`tag ${overdue ? 'warn' : 'due'}`}>${taken ? '확인 대기' : dueLabel(c.dueAt)}</span>
             </div>
           </button>`;
@@ -1174,7 +1216,7 @@ function ChildHome({ fid, me, chores, requests, family }) {
           <button class="chore-tile" disabled=${full} onClick=${() => setDoing(c)} key=${c.id}>
             <span class="emoji big">${c.emoji}</span>
             <span class="title">${c.name}</span>
-            ${serving ? html`<span class="tag service">봉사</span>` : html`<span class="price">${won(c.price)}</span>`}
+            ${serving ? html`<span class="tag service">봉사</span>` : html`<span class="price">${won(priceFor(c, me.id))}</span>`}
             ${c.dailyLimit > 0 && html`<span class="muted small">${full ? '오늘 완료' : `오늘 ${n}/${c.dailyLimit}`}</span>`}
           </button>`;
       })}
@@ -1216,7 +1258,7 @@ function DoneModal({ fid, me, chore, requests, onClose }) {
       choreName: chore.name,
       choreKind: choreKind(chore),
       emoji: chore.emoji,
-      amount: chore.price,
+      amount: priceFor(chore, me.id),
       memo: memo.trim(),
     }), '부모님께 완료 요청을 보냈어요!');
     if (ok) onClose();
@@ -1225,7 +1267,7 @@ function DoneModal({ fid, me, chore, requests, onClose }) {
     <${Modal} title=${choreKind(chore) === 'mission' ? '특별 미션 완료' : '집안일 완료'} onClose=${onClose}>
       <div class="done-head">
         <span class="emoji big">${chore.emoji}</span>
-        <div><div class="title">${chore.name}</div><div class="plus">+${won(chore.price)}</div></div>
+        <div><div class="title">${chore.name}</div><div class="plus">+${won(priceFor(chore, me.id))}</div></div>
       </div>
       ${chore.desc && html`<p class="muted">${chore.desc}</p>`}
       ${me.serviceRemaining > 0 && choreKind(chore) === 'paid' && html`

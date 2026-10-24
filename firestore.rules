@@ -24,16 +24,17 @@ service cloud.firestore {
 
     // 자녀가 집안일로 만드는 요청 검사
     // - 기본 할 일(duty): 0원, 바로 '승인' 상태
-    // - 용돈 집안일(paid) / 특별 미션(mission): 현재 가격 그대로, '대기' 상태
+    // - 용돈 집안일(paid) / 특별 미션(mission): 현재 가격 그대로(자녀별 금액이 있으면 그 값), '대기' 상태
     // - 미션은 끝나지 않았고 마감 전이어야 한다
     function validChoreRequest(fid) {
       let r = request.resource.data;
       let c = get(/databases/$(database)/documents/families/$(fid)/chores/$(r.choreId)).data;
       let kind = c.get('kind', 'paid');
+      let price = c.get('prices', {}).get(uid(), c.price);
       return c.hidden == false
         && ((kind == 'duty' && r.type == 'duty' && r.amount == 0 && r.status == 'approved')
-          || (kind == 'paid' && r.type == 'chore' && r.amount == c.price && r.status == 'pending')
-          || (kind == 'mission' && r.type == 'chore' && r.amount == c.price && r.status == 'pending'
+          || (kind == 'paid' && r.type == 'chore' && r.amount == price && r.status == 'pending')
+          || (kind == 'mission' && r.type == 'chore' && r.amount == price && r.status == 'pending'
               && c.get('done', false) == false
               && (c.get('dueAt', null) == null || request.time.toMillis() <= c.dueAt)));
     }

@@ -310,6 +310,8 @@ button.card:disabled { opacity: .55; cursor: default; }
 .emoji-pick { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 6px; }
 .emoji-pick button { border: 1px solid transparent; background: var(--bg); border-radius: 10px; font-size: 22px; padding: 4px 0; }
 .emoji-pick button.on { border-color: var(--primary); background: var(--primary-soft); }
+.price-row { display: grid; grid-template-columns: 72px 1fr auto; align-items: center; gap: 8px; margin-top: 6px; color: var(--text); }
+.price-row input { margin-top: 0; }
 .switch { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; font-weight: 600; }
 .switch input { width: 20px; height: 20px; accent-color: var(--primary); }
 .done-head { display: flex; align-items: center; gap: 14px; margin: 4px 0 10px; }

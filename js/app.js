@@ -11,7 +11,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v10 (10/24)';
+const APP_VERSION = 'v11 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -1036,7 +1036,6 @@ function RulesTab({ fid, family, members, requests, me }) {
   const [applying, setApplying] = useState(null); // 규칙 또는 'major'
   const [editing, setEditing] = useState(null);   // 규칙 또는 {} (새 규칙)
   const [editNote, setEditNote] = useState(false);
-  const [majorFor, setMajorFor] = useState(null); // 중대 사안을 적용할 자녀
   const records = requests
     .filter((r) => r.type === 'penalty' || (r.type === 'service' && r.count > 0))
     .filter((r) => isParent || r.childId === me.id)
@@ -1114,51 +1113,74 @@ function RulesTab({ fid, family, members, requests, me }) {
       </div>`}
 
     ${applying && html`
-      <${RuleApplyModal} fid=${fid} rule=${applying} members=${members} onClose=${() => setApplying(null)}
-        onMajor=${(child) => { setApplying(null); setMajorFor(child); }} />`}
-    ${majorFor && html`
-      <${ServiceModal} fid=${fid} child=${members.find((m) => m.id === majorFor.id)} settings=${settings}
-        initialMode="violence" onClose=${() => setMajorFor(null)} />`}
+      <${RuleApplyModal} fid=${fid} rule=${applying} members=${members} settings=${settings} onClose=${() => setApplying(null)} />`}
     ${editing && html`<${RuleEditModal} fid=${fid} family=${family} rule=${editing} onClose=${() => setEditing(null)} />`}
     ${editNote && html`<${RulesNoteModal} fid=${fid} family=${family} onClose=${() => setEditNote(false)} />`}`;
 }
 
-// 규칙을 자녀에게 적용 (차감 또는 집안일 봉사)
-function RuleApplyModal({ fid, rule, members, onClose, onMajor }) {
+// 규칙을 자녀에게 적용 (차감 / 집안일 봉사 / 중대 사안). 자녀 한 명 또는 모두에게 한 번에.
+function RuleApplyModal({ fid, rule, members, settings, onClose }) {
   const children = members.filter((m) => m.role === 'child');
-  const [childId, setChildId] = useState(children.length === 1 ? children[0].id : null);
-  const child = children.find((c) => c.id === childId);
+  // 'all' 또는 자녀 id. 자녀가 한 명이면 그 아이로 정해 둔다.
+  const [sel, setSel] = useState(children.length === 1 ? children[0].id : null);
+  const targets = sel === 'all' ? children : children.filter((c) => c.id === sel);
   const major = rule === 'major';
-  const short = !major && rule.type === 'money' && child && rule.amount > (child.balance || 0);
+  const isMoney = !major && rule.type === 'money';
   const isService = !major && rule.type === 'service';
-  const dailyTotal = isService ? rule.count : 0;
-  const [due, setDue] = useServiceDue(1);
+  const [cases, setCases] = useState('1');
+  const pieces = major ? Number(cases) || 0 : 1;
+  const perDay = major ? settings.violencePerCase : isService ? rule.count : 0;
+  const dailyTotal = perDay * pieces;
+  const [due, setDue] = useServiceDue(major ? 7 : 1);
+  const short = isMoney ? targets.filter((c) => rule.amount > (c.balance || 0)) : [];
+  const names = (list) => list.map((c) => c.name).join(', ');
 
   const apply = async () => {
-    if (!child) return toast('누구에게 적용할지 골라 주세요.');
-    if (major) return onMajor(child);
+    if (!targets.length) return toast('누구에게 적용할지 골라 주세요.');
+    if (major && (!Number.isInteger(pieces) || pieces < 1 || pieces > 10)) return toast('건수는 1~10건으로 입력해 주세요.');
     const dueAt = dateInputToDue(due);
-    if (isService && (!dueAt || dueAt < Date.now())) return toast('기한은 오늘이나 그 뒤 날짜로 정해 주세요.');
-    const make = rule.type === 'money'
-      ? (m) => penaltyRecord(m, rule.amount, rule.title)
-      : (m) => serviceRecord(m, rule.count, rule.title, dueAt);
-    if (await run(() => store.addRecord(fid, child.id, make), `${child.name}에게 적용했어요.`)) onClose();
+    if (!isMoney && (!dueAt || dueAt < Date.now())) return toast('기한은 오늘이나 그 뒤 날짜로 정해 주세요.');
+    let make;
+    if (isMoney) make = (m) => penaltyRecord(m, rule.amount, rule.title);
+    else if (major) make = (m) => serviceRecord(m, perDay, '생활 약속 위반', dueAt, pieces);
+    else make = (m) => serviceRecord(m, perDay, rule.title, dueAt);
+    const ok = await run(async () => {
+      for (const c of targets) await store.addRecord(fid, c.id, make);
+    }, `${names(targets)}에게 적용했어요.`);
+    if (ok) onClose();
   };
 
   return html`
-    <${Modal} title=${major ? '중대 사안 적용' : `${rule.emoji || '📌'} ${rule.title}`} onClose=${onClose}>
-      <p class="muted">${major ? '누구에게 적용할까요? 다음 화면에서 건수를 입력해요.' : `${ruleEffect(rule)} · 누구에게 적용할까요?`}</p>
+    <${Modal} title=${major ? '🏫 중대 사안 적용' : `${rule.emoji || '📌'} ${rule.title}`} onClose=${onClose}>
+      <p class="muted">${major ? `1건당 매일 ${settings.violencePerCase}회 집안일 봉사` : ruleEffect(rule)} · 누구에게 적용할까요?</p>
       <div class="chips">
         ${children.map((c) => html`
-          <button class=${`chip ${childId === c.id ? 'on' : ''}`} onClick=${() => setChildId(c.id)}>${c.name}</button>`)}
+          <button class=${`chip ${sel === c.id ? 'on' : ''}`} onClick=${() => setSel(c.id)}>${c.name}</button>`)}
+        ${children.length > 1 && html`
+          <button class=${`chip ${sel === 'all' ? 'on' : ''}`} onClick=${() => setSel('all')}>👨‍👩‍👦 모두 (일괄 적용)</button>`}
       </div>
-      ${child && !major && rule.type === 'money' && html`
-        <p class="hint">잔액 ${won(child.balance)} → <b>${won(Math.max(0, (child.balance || 0) - rule.amount))}</b></p>`}
-      ${child && !major && rule.type === 'service' && html`
-        <p class="hint service-hint">규칙의 봉사 횟수는 <b>하루 횟수</b>예요. 기한을 늘리면 그날까지 매일 해야 해요.</p>
-        <${ServiceDueField} dailyTotal=${dailyTotal} value=${due} onChange=${setDue} />`}
-      ${short && html`<p class="error">잔액이 ${won(child.balance)}이라 ${won(rule.amount)}을 뺄 수 없어요. 가족 탭의 차감에서 금액을 직접 정할 수 있어요.</p>`}
-      <button class="btn danger block" disabled=${!child || short} onClick=${apply}>${major ? '다음' : '적용하기'}</button>
+
+      ${isMoney && targets.map((c) => html`
+        <p class=${`hint ${rule.amount > (c.balance || 0) ? 'error' : ''}`} key=${c.id}>
+          ${c.name}: 잔액 ${won(c.balance)} → ${rule.amount > (c.balance || 0) ? '잔액 부족' : html`<b>${won((c.balance || 0) - rule.amount)}</b>`}
+        </p>`)}
+      ${short.length > 0 && html`
+        <p class="error">${`${names(short)}의 잔액이 부족해서 ${won(rule.amount)}을 뺄 수 없어요. `
+          + `${sel === 'all' ? '아이를 한 명씩 골라 적용하거나, ' : ''}가족 탭의 차감에서 금액을 직접 정해 주세요.`}</p>`}
+
+      ${major && html`
+        <div class="banner">학교 등에서 <b>사실과 조치가 확정된 뒤</b>에만 적용하세요. 아이 화면에는 "생활 약속 위반"으로만 보여요.</div>
+        <label class="field">조치가 확정된 건수 ${sel === 'all' ? '(아이마다 같은 건수)' : ''}
+          <input type="number" inputmode="numeric" min="1" max="10" step="1" value=${cases} onInput=${(e) => setCases(e.target.value)} />
+        </label>`}
+      ${!isMoney && html`
+        ${isService && html`<p class="hint service-hint">규칙의 봉사 횟수는 <b>하루 횟수</b>예요. 기한을 늘리면 그날까지 매일 해야 해요.</p>`}
+        <${ServiceDueField} dailyTotal=${dailyTotal} value=${due} onChange=${setDue} />
+        ${sel === 'all' && html`<p class="hint">아이마다 각각 위 횟수만큼 생겨요.</p>`}`}
+
+      <button class="btn danger block" disabled=${!targets.length || short.length > 0} onClick=${apply}>
+        ${targets.length ? `${sel === 'all' ? '모두' : names(targets)}에게 적용하기` : '적용하기'}
+      </button>
     <//>`;
 }
 

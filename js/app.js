@@ -10,7 +10,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v4 (10/24)';
+const APP_VERSION = 'v5 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -87,7 +87,7 @@ const statusText = (r) => {
 const showReason = (r) => r.reason && (r.status === 'rejected' || r.type === 'penalty' || r.type === 'service');
 
 function Amount({ r }) {
-  if (r.type === 'duty') return html`<div class="amount duty">✔</div>`;
+  if (r.type === 'duty') return html`<div class="amount check-mark">✔</div>`;
   if (r.type === 'service') return html`<div class="amount service">${r.count > 0 ? '+' : ''}${r.count}회</div>`;
   if (r.serviceUsed) return html`<div class="amount service">봉사</div>`;
   const minus = r.type === 'payout' || r.type === 'penalty';

@@ -219,7 +219,7 @@ main { padding: 4px 16px calc(96px + env(safe-area-inset-bottom)); }
 .tag.ok { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
 .tag.warn { background: rgba(220, 38, 38, .12); color: var(--minus); border-color: transparent; }
 .tag.due { background: var(--warn-bg); color: var(--warn-text); border-color: transparent; font-weight: 700; }
-.amount.duty { color: var(--primary); }
+.amount.check-mark { color: var(--primary); }
 .amount.service { color: #7c3aed; font-size: 14px; }
 .service-hint { color: #7c3aed; }
 .service-text { color: #7c3aed; font-weight: 600; }
@@ -240,7 +240,7 @@ main { padding: 4px 16px calc(96px + env(safe-area-inset-bottom)); }
 .btn.reopen { margin-top: 8px; }
 
 /* 기본 할 일 체크리스트 */
-.duty { width: 100%; }
+button.duty { width: 100%; }
 .check {
   width: 26px; height: 26px; flex-shrink: 0; border-radius: 8px;
   border: 2px solid var(--line); display: grid; place-items: center;

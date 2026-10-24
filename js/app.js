@@ -11,7 +11,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v11 (10/24)';
+const APP_VERSION = 'v12 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -930,14 +930,14 @@ function ServiceDueField({ dailyTotal, value, onChange }) {
 
 function ServiceModal({ fid, child, settings, onClose, initialMode = 'normal' }) {
   const [mode, setMode] = useState(initialMode);
-  const [reason, setReason] = useState('');
-  const [count, setCount] = useState('1');
+  const [reason, setReason] = useState('생활 약속 위반');
+  const [count, setCount] = useState(String(settings.violencePerCase)); // 일반: 1건당 하루 횟수
   const [cases, setCases] = useState('1');
   const remaining = child.serviceRemaining || 0;
   const violence = mode === 'violence';
-  // 카드 한 장의 하루 횟수, 카드 장수 (중대 사안은 건마다 카드 1장)
+  // 위반 1건 = 카드 1장. 하루 봉사 = 1건당 하루 횟수 × 건수 (중대 사안은 1건당 횟수가 규칙 설정값)
   const perDay = violence ? settings.violencePerCase : Number(count);
-  const pieces = violence ? Number(cases) || 0 : 1;
+  const pieces = Number(cases) || 0;
   const dailyTotal = Number.isInteger(perDay) && perDay > 0 ? perDay * pieces : 0;
   const [due, setDue] = useServiceDue(violence ? 7 : 1);
   const [editItem, setEditItem] = useState(null);
@@ -982,9 +982,15 @@ function ServiceModal({ fid, child, settings, onClose, initialMode = 'normal' })
         </div>
         <textarea rows="2" maxlength="100" placeholder="자녀에게 보여 줄 이유" value=${reason}
           onInput=${(e) => setReason(e.target.value)}></textarea>
-        <label class="field">하루 횟수 (매일 해야 하는 봉사)
-          <input type="number" inputmode="numeric" min="1" max="20" step="1" value=${count} onInput=${(e) => setCount(e.target.value)} />
-        </label>` : html`
+        <div class="two-col">
+          <label class="field">위반 건수
+            <input type="number" inputmode="numeric" min="1" max="10" step="1" value=${cases} onInput=${(e) => setCases(e.target.value)} />
+          </label>
+          <label class="field">1건당 하루 횟수
+            <input type="number" inputmode="numeric" min="1" max="20" step="1" value=${count} onInput=${(e) => setCount(e.target.value)} />
+          </label>
+        </div>
+        <p class="muted">${pieces || 0}건 × 매일 ${Number(count) || 0}회 → <b>매일 ${dailyTotal}회</b> (카드 ${pieces || 0}장)</p>` : html`
         <div class="banner">학교 등에서 <b>사실과 조치가 확정된 뒤</b>에만 적용하세요. 자녀 화면에는 사건 내용 없이 "생활 약속 위반"과 "집안일 봉사"로만 보여요.</div>
         <label class="field">조치가 확정된 건수
           <input type="number" inputmode="numeric" min="1" max="10" step="1" value=${cases} onInput=${(e) => setCases(e.target.value)} />
@@ -1494,6 +1500,7 @@ function ServiceItemCard({ item, who, onOpen }) {
     <div class="mission-side">
       <span class="tag service">남은 ${item.remaining}회</span>
       ${item.dueAt && html`<span class=${`tag ${overdue ? 'warn' : 'due'}`}>${overdue ? '기한 지남' : `기한 ${dueLabel(item.dueAt)}`}</span>`}
+      ${onOpen && item.perDay == null && html`<span class="tag warn">⚠ 하루 횟수 확인</span>`}
       ${onOpen && html`<span class="muted small">수정 ›</span>`}
     </div>`;
   const cls = `card service-card ${overdue ? 'overdue-card' : ''}`;
@@ -1544,6 +1551,9 @@ function ServiceItemModal({ fid, child, item, onClose }) {
   return html`
     <${Modal} title=${`${child.name} · 집안일 봉사`} onClose=${onClose}>
       <p class="muted">총 ${item.count}회 중 ${item.count - item.remaining}회 완료 · 오늘 ${todayDone}/${perDayOf(item)}회</p>
+      ${item.perDay == null && html`
+        <div class="banner">⚠ 하루 횟수 기능이 생기기 전에 만든 카드라 <b>매일 1회</b>로 되어 있어요.
+          아래에서 하루 횟수(예: 2건이면 4회)와 기한을 정하고 저장해 주세요.</div>`}
       <label class="field">사유 (아이에게 보여요)
         <input maxlength="40" value=${reason} onInput=${(e) => setReason(e.target.value)} />
       </label>

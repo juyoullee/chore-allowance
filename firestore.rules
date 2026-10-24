@@ -1,0 +1,109 @@
+rules_version = '2';
+
+// 집안일 용돈 앱 보안 규칙
+// - 같은 가족 구성원만 가족 데이터를 볼 수 있다.
+// - 집안일 항목·가격 변경, 승인/반려, 잔액 변경은 부모만 할 수 있다.
+// - 자녀는 자기 이름으로만 요청을 만들 수 있고, 금액은 현재 가격/잔액을 넘을 수 없다.
+// - 자녀는 자기 저축 목표(goal)와 이름만 바꿀 수 있다.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function memberPath(fid) { return /databases/$(database)/documents/families/$(fid)/members/$(uid()); }
+    function isMember(fid) { return signedIn() && exists(memberPath(fid)); }
+    function me(fid) { return get(memberPath(fid)).data; }
+    function isParent(fid) { return isMember(fid) && me(fid).role == 'parent'; }
+    function isChild(fid) { return isMember(fid) && me(fid).role == 'child'; }
+
+    function validJoin(fid) {
+      let code = request.resource.data.joinCode;
+      let inv = get(/databases/$(database)/documents/inviteCodes/$(code)).data;
+      return code is string && inv.familyId == fid && inv.role == request.resource.data.role;
+    }
+
+    // 자녀가 집안일로 만드는 요청 검사
+    // - 기본 할 일(duty): 0원, 바로 '승인' 상태
+    // - 용돈 집안일(paid) / 특별 미션(mission): 현재 가격 그대로, '대기' 상태
+    // - 미션은 끝나지 않았고 마감 전이어야 한다
+    function validChoreRequest(fid) {
+      let r = request.resource.data;
+      let c = get(/databases/$(database)/documents/families/$(fid)/chores/$(r.choreId)).data;
+      let kind = c.get('kind', 'paid');
+      return c.hidden == false
+        && ((kind == 'duty' && r.type == 'duty' && r.amount == 0 && r.status == 'approved')
+          || (kind == 'paid' && r.type == 'chore' && r.amount == c.price && r.status == 'pending')
+          || (kind == 'mission' && r.type == 'chore' && r.amount == c.price && r.status == 'pending'
+              && c.get('done', false) == false
+              && (c.get('dueAt', null) == null || request.time.toMillis() <= c.dueAt)));
+    }
+
+    function validPayoutRequest(fid) {
+      let r = request.resource.data;
+      return r.type == 'payout' && r.status == 'pending' && r.amount > 0
+        && r.amount <= me(fid).balance
+        && me(fid).get('serviceRemaining', 0) == 0;
+    }
+
+    // 연속 달성 보너스 요청: 금액은 가족 설정값 그대로, 부모 승인 대기
+    function validBonusRequest(fid) {
+      let r = request.resource.data;
+      let settings = get(/databases/$(database)/documents/families/$(fid)).data.get('settings', {});
+      return r.type == 'bonus' && r.status == 'pending'
+        && r.amount == settings.get('streakBonus', 1000)
+        && r.streakKey is int;
+    }
+
+    match /users/{userId} {
+      allow read, write: if signedIn() && uid() == userId;
+    }
+
+    match /inviteCodes/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn() && isParent(request.resource.data.familyId);
+      allow delete: if signedIn() && isParent(resource.data.familyId);
+    }
+
+    match /families/{fid} {
+      allow create: if signedIn() && request.resource.data.createdBy == uid();
+      allow read: if isMember(fid);
+      allow update: if isParent(fid);
+
+      match /members/{memberId} {
+        allow read: if isMember(fid);
+        allow create: if signedIn() && memberId == uid()
+          && request.resource.data.balance == 0
+          && request.resource.data.serviceRemaining == 0
+          && request.resource.data.role in ['parent', 'child']
+          && ((request.resource.data.role == 'parent'
+               && get(/databases/$(database)/documents/families/$(fid)).data.createdBy == uid())
+              || validJoin(fid));
+        allow update: if isParent(fid)
+          || (memberId == uid() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'goal']));
+        allow delete: if isParent(fid) && memberId != uid();
+      }
+
+      match /chores/{choreId} {
+        allow read: if isMember(fid);
+        allow write: if isParent(fid);
+      }
+
+      match /requests/{reqId} {
+        allow read: if isMember(fid);
+        allow create: if (isChild(fid)
+            && request.resource.data.childId == uid()
+            && request.resource.data.amount is int
+            && ((request.resource.data.type == 'payout' && validPayoutRequest(fid))
+              || (request.resource.data.type == 'bonus' && validBonusRequest(fid))
+              || (request.resource.data.type in ['chore', 'duty'] && validChoreRequest(fid))))
+          // 부모는 차감·봉사 의무 기록을 직접 남긴다.
+          || (isParent(fid) && request.resource.data.type in ['penalty', 'service']
+              && request.resource.data.status == 'approved');
+        allow update: if isParent(fid);
+        // 자녀는 대기 중인 요청을 취소하거나, 체크한 기본 할 일을 해제할 수 있다.
+        allow delete: if isParent(fid)
+          || (resource.data.childId == uid() && (resource.data.status == 'pending' || resource.data.type == 'duty'));
+      }
+    }
+  }
+}

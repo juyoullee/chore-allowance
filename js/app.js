@@ -109,7 +109,161 @@ function DemoLogin() {
     </div>`;
 }
 
-function FirebaseLogin() {
+/* ───────── 여러 계정 (가족 태블릿) ───────── */
+
+const roleEmoji = (role) => ({ parent: '🧑', child: '🧒' }[role] || '🙂');
+const roleText = (role) => ({ parent: '부모', child: '자녀' }[role] || '');
+
+// 4자리 숫자 PIN 입력판
+function PinPad({ title, subtitle, error, disabled, onDone, onCancel, footer }) {
+  const [pin, setPin] = useState('');
+  const press = (d) => {
+    if (disabled) return;
+    const next = (pin + d).slice(0, 4);
+    setPin(next);
+    if (next.length === 4) {
+      setTimeout(() => setPin(''), 150);
+      onDone(next);
+    }
+  };
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
+  return html`
+    <${Modal} title=${title} onClose=${onCancel}>
+      ${subtitle && html`<p class="muted center-text">${subtitle}</p>`}
+      <div class="pin-dots">${[0, 1, 2, 3].map((i) => html`<span class=${i < pin.length ? 'on' : ''}></span>`)}</div>
+      <p class="error center-text">${error || ' '}</p>
+      <div class="pin-keys">
+        ${keys.map((k) => (k === '' ? html`<span></span>` : html`
+          <button disabled=${disabled} onClick=${() => (k === '⌫' ? setPin(pin.slice(0, -1)) : press(k))}
+            aria-label=${k === '⌫' ? '지우기' : k}>${k}</button>`))}
+      </div>
+      ${footer}
+    <//>`;
+}
+
+// PIN 정하기 (두 번 입력해서 확인)
+function PinSetup({ title, onDone, onCancel }) {
+  const [first, setFirst] = useState(null);
+  const [error, setError] = useState('');
+  const done = async (pin) => {
+    if (!first) { setFirst(pin); setError(''); return; }
+    if (pin !== first) { setFirst(null); setError('두 번 입력한 PIN이 달라요. 처음부터 다시 입력해 주세요.'); return; }
+    if (await run(() => store.setPin(pin), 'PIN을 정했어요.')) onDone();
+  };
+  return html`<${PinPad} title=${title}
+    subtitle=${first ? '확인을 위해 한 번 더 입력해 주세요.' : '이 기기에서 내 계정으로 들어올 때 쓰는 숫자 4자리예요.'}
+    error=${error} onDone=${done} onCancel=${onCancel} />`;
+}
+
+// 저장된 계정으로 들어갈 때 PIN 확인. 5번 틀리면 30초 동안 막는다.
+function PinCheck({ account, onCancel }) {
+  const [error, setError] = useState('');
+  const [fails, setFails] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const locked = Date.now() < lockedUntil;
+  const done = async (pin) => {
+    if (await store.checkPin(account.slot, pin)) { store.switchTo(account.slot); return; }
+    const n = fails + 1;
+    setFails(n);
+    if (n % 5 === 0) {
+      setLockedUntil(Date.now() + 30000);
+      setError('5번 틀렸어요. 30초 뒤에 다시 시도해 주세요.');
+      setTimeout(() => { setLockedUntil(0); setError(''); }, 30000);
+    } else {
+      setError(`PIN이 맞지 않아요. (${n}번 틀림)`);
+    }
+  };
+  const forgot = async () => {
+    if (!confirm(`PIN을 잊었으면 ${account.name} 계정을 이 기기에서 지우고 이메일과 비밀번호로 다시 로그인해야 해요. 지울까요?`)) return;
+    await run(() => store.forget(account.slot));
+    onCancel();
+  };
+  return html`<${PinPad} title=${`${roleEmoji(account.role)} ${account.name}`} subtitle="PIN 4자리를 입력해 주세요."
+    error=${error} disabled=${locked} onDone=${done} onCancel=${onCancel}
+    footer=${html`<button class="link block-link" onClick=${forgot}>PIN을 잊었어요</button>`} />`;
+}
+
+// '누가 사용하나요?' 화면
+function AccountPicker({ onAdd }) {
+  const [accounts, setAccounts] = useState(() => store.listAccounts());
+  const [picking, setPicking] = useState(null);
+  const [editing, setEditing] = useState(false);
+
+  const choose = (a) => (a.hasPin ? setPicking(a) : store.switchTo(a.slot));
+  const remove = async (a) => {
+    if (!confirm(`${a.name} 계정을 이 기기에서 지울까요? 다시 쓰려면 이메일과 비밀번호로 로그인해야 해요.`)) return;
+    await run(() => store.forget(a.slot), '이 기기에서 지웠어요.');
+    setAccounts(store.listAccounts());
+  };
+
+  return html`
+    <div class="auth">
+      <div class="logo">🏠</div>
+      <h1>누가 사용하나요?</h1>
+      <div class="profiles">
+        ${accounts.map((a) => html`
+          <div class="profile" key=${a.slot}>
+            <button class="profile-btn" onClick=${() => (editing ? remove(a) : choose(a))}>
+              <span class="profile-face">${editing ? '🗑️' : roleEmoji(a.role)}</span>
+              <span class="profile-name">${a.name}</span>
+              <span class="muted small">${roleText(a.role)}${a.hasPin ? ' · 🔒' : ''}</span>
+            </button>
+          </div>`)}
+        ${!editing && html`
+          <div class="profile">
+            <button class="profile-btn add" onClick=${onAdd}>
+              <span class="profile-face">＋</span>
+              <span class="profile-name">계정 추가</span>
+            </button>
+          </div>`}
+      </div>
+      <button class="link" onClick=${() => setEditing(!editing)}>${editing ? '완료' : '이 기기에서 계정 지우기'}</button>
+      ${picking && html`<${PinCheck} account=${picking} onCancel=${() => { setPicking(null); setAccounts(store.listAccounts()); }} />`}
+    </div>`;
+}
+
+// 로그인 전: 저장된 계정이 있으면 고르기 화면, 없으면 로그인 화면
+function AccountGate() {
+  const [adding, setAdding] = useState(false);
+  const hasAccounts = store.listAccounts().length > 0;
+  if (adding || !hasAccounts) {
+    return html`<${FirebaseLogin} onBack=${hasAccounts ? () => setAdding(false) : null} />`;
+  }
+  return html`<${AccountPicker} onAdd=${() => setAdding(true)} />`;
+}
+
+// 머리글의 '바꾸기' 메뉴
+function UserMenu({ me, onClose }) {
+  const [pinFor, setPinFor] = useState(null); // 'switch' | 'change'
+  const account = store.currentAccount();
+  const others = store.listAccounts().length - 1;
+
+  const switchUser = () => (account?.hasPin ? store.showPicker() : setPinFor('switch'));
+  const logout = () => {
+    if (confirm('이 기기에서 로그아웃할까요? 다시 쓰려면 이메일과 비밀번호(또는 Google)로 로그인해야 해요.')) store.signOut();
+  };
+
+  if (pinFor) {
+    return html`<${PinSetup}
+      title=${pinFor === 'switch' ? '바꾸기 전에 PIN을 정해 주세요' : 'PIN 바꾸기'}
+      onCancel=${() => setPinFor(null)}
+      onDone=${() => (pinFor === 'switch' ? store.showPicker() : onClose())} />`;
+  }
+  return html`
+    <${Modal} title=${`${roleEmoji(me.role)} ${me.name}`} onClose=${onClose}>
+      <p class="muted small">${account?.email || ''}</p>
+      <div class="stack">
+        <button class="btn primary block" onClick=${switchUser}>
+          👥 사용자 바꾸기${others > 0 ? ` (저장된 계정 ${others}개 더)` : ''}
+        </button>
+        <button class="btn block" onClick=${() => setPinFor('change')}>🔒 ${account?.hasPin ? 'PIN 바꾸기' : 'PIN 정하기'}</button>
+        <button class="btn danger-ghost block" onClick=${logout}>이 기기에서 로그아웃</button>
+      </div>
+      <p class="hint">여러 사람이 같이 쓰는 기기라면 각자 PIN을 정해 두세요. 다른 사람이 내 계정으로 들어오지 못해요.</p>
+    <//>`;
+}
+
+function FirebaseLogin({ onBack }) {
   const [signUp, setSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
@@ -140,6 +294,7 @@ function FirebaseLogin() {
       <button class="link" onClick=${() => setSignUp(!signUp)}>
         ${signUp ? '이미 계정이 있어요 → 로그인' : '처음이에요 → 이메일로 가입'}
       </button>
+      ${onBack && html`<button class="link block-link" onClick=${onBack}>← 저장된 계정으로 돌아가기</button>`}
     </div>`;
 }
 
@@ -183,13 +338,16 @@ function Onboarding({ user }) {
               value=${code} onInput=${(e) => setCode(e.target.value.toUpperCase())} />`}
         <button class="btn primary block" disabled=${busy}>${tab === 'create' ? '가족 만들기' : '참여하기'}</button>
       </form>
-      <button class="link" onClick=${() => store.signOut()}>다른 계정으로 로그인</button>
+      ${store.mode === 'firebase' && store.listAccounts().length > 1
+        ? html`<button class="link" onClick=${() => store.showPicker()}>다른 사용자로 바꾸기</button>`
+        : html`<button class="link" onClick=${() => store.signOut()}>다른 계정으로 로그인</button>`}
     </div>`;
 }
 
 /* ───────── 화면 틀 ───────── */
 
 function Shell({ family, me, tabs, tab, setTab, children }) {
+  const [menu, setMenu] = useState(false);
   return html`
     <div class="shell">
       <header class="top">
@@ -197,8 +355,11 @@ function Shell({ family, me, tabs, tab, setTab, children }) {
           <div class="fam">${family.name}</div>
           <div class="who">${me.name} · ${me.role === 'parent' ? '부모' : '자녀'}${store.mode === 'demo' ? ' · 체험' : ''}</div>
         </div>
-        <button class="btn small ghost" onClick=${() => store.signOut()}>나가기</button>
+        ${store.mode === 'demo'
+          ? html`<button class="btn small ghost" onClick=${() => store.signOut()}>나가기</button>`
+          : html`<button class="btn small ghost" onClick=${() => setMenu(true)}>👥 바꾸기</button>`}
       </header>
+      ${menu && html`<${UserMenu} me=${me} onClose=${() => setMenu(false)} />`}
       <main>${children}</main>
       <nav class="tabs">
         ${tabs.map(([key, label, icon, badge]) => html`
@@ -1131,9 +1292,13 @@ function FamilyApp({ user, fid }) {
   const members = useWatch((cb) => store.watchMembers(fid, cb), [fid]);
   const chores = useWatch((cb) => store.watchChores(fid, cb), [fid]);
   const requests = useWatch((cb) => store.watchRequests(fid, cb), [fid]);
+  const me = members?.find((m) => m.id === user.uid);
+  // '누가 사용하나요?' 화면에 보여 줄 이름과 역할을 기억해 둔다.
+  useEffect(() => {
+    if (me && store.rememberProfile) store.rememberProfile({ name: me.name, role: me.role });
+  }, [me?.name, me?.role]);
 
   if (!family || !members || !chores || !requests) return html`<${Loading} />`;
-  const me = members.find((m) => m.id === user.uid);
   if (!me) {
     return html`<div class="auth"><p>가족 정보를 찾을 수 없어요.</p>
       <button class="btn" onClick=${() => store.signOut()}>나가기</button></div>`;
@@ -1152,10 +1317,11 @@ function App() {
 
   let page;
   if (user === undefined) page = html`<${Loading} />`;
-  else if (!user) page = store.mode === 'demo' ? html`<${DemoLogin} />` : html`<${FirebaseLogin} />`;
+  else if (!user) page = store.mode === 'demo' ? html`<${DemoLogin} />` : html`<${AccountGate} />`;
   else if (profile === undefined) page = html`<${Loading} />`;
-  else if (!profile?.familyId) page = html`<${Onboarding} user=${user} />`;
-  else page = html`<${FamilyApp} user=${user} fid=${profile.familyId} />`;
+  else if (!profile?.familyId) page = html`<${Onboarding} key=${user.uid} user=${user} />`;
+  // 사용자를 바꾸면 화면을 새로 만들어 그 계정으로 다시 구독한다.
+  else page = html`<${FamilyApp} key=${user.uid} user=${user} fid=${profile.familyId} />`;
 
   return html`${page}<${Toast} />`;
 }

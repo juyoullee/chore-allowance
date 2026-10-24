@@ -100,6 +100,10 @@ export default {
     return () => authListeners.delete(cb);
   },
   signOut: async () => setUid(null),
+  // 체험 모드에는 저장된 계정 목록이 없다 (부모/자녀 버튼으로 바로 바꾼다).
+  listAccounts: () => [],
+  currentAccount: () => null,
+  showPicker: async () => setUid(null),
   signInGoogle: unsupported,
   signInEmail: unsupported,
   signUpEmail: unsupported,

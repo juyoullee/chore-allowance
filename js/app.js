@@ -10,7 +10,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v3 (10/24)';
+const APP_VERSION = 'v4 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -552,7 +552,39 @@ function ChoresTab({ fid, chores, members }) {
         onClose=${() => setEditing(null)} />`}`;
 }
 
-const EMOJIS = ['🍽️', '🧹', '🧺', '👕', '🗑️', '♻️', '🛏️', '🚽', '👟', '🪴', '🐶', '🛒', '🧽', '🚗', '📚', '✅'];
+// 집안일 아이콘: 종류별로 묶어 보여 준다. 목록에 없으면 직접 입력할 수 있다.
+const EMOJI_GROUPS = [
+  ['청소', ['🧹', '🧽', '🧼', '🪣', '🗑️', '♻️', '🚮', '🪟', '🚽', '🛁', '🚿', '🧴', '🪠', '💨']],
+  ['빨래·옷', ['🧺', '👕', '👚', '👖', '🧦', '👗', '🧥', '🩳', '👟', '🥿', '🧢', '🪡', '🫧', '☀️']],
+  ['부엌·식사', ['🍽️', '🥣', '🍳', '🥢', '🍴', '🥄', '🍚', '🥗', '🫖', '☕', '🥤', '🧊', '🧂', '🥬']],
+  ['방·정리', ['🛏️', '🎒', '📚', '📦', '🧸', '🪑', '🗄️', '🖥️', '🧩', '✏️', '🪞', '🛋️', '🧷', '🗂️']],
+  ['바깥·심부름', ['🛒', '🛍️', '🚗', '🚲', '🌱', '🪴', '🌷', '🍂', '❄️', '📬', '🏃', '🚶', '🏪', '🧾']],
+  ['반려동물·가족', ['🐶', '🐱', '🐟', '🐹', '🐰', '🦜', '👶', '👵', '👴', '💊', '🤝', '💐', '📞', '🎂']],
+  ['공부·습관', ['📖', '📝', '🧮', '🎹', '🎻', '⚽', '🏀', '🏸', '🧘', '⏰', '🦷', '💤', '📵', '🚰']],
+  ['기타', ['✅', '⭐', '🏆', '💪', '🎯', '❤️', '🔥', '✨', '👍', '🙌', '🎉', '💡', '🔧', '🔋']],
+];
+
+// 종류별 아이콘 고르기 + 직접 입력 (집안일, 저축 목표에서 같이 쓴다)
+function EmojiPicker({ value, onPick, groups = EMOJI_GROUPS }) {
+  const [tab, setTab] = useState(() => Math.max(0, groups.findIndex(([, list]) => list.includes(value))));
+  return html`
+    <div class="emoji-box">
+      <div class="emoji-tabs">
+        ${groups.map(([label], i) => html`
+          <button class=${`chip ${tab === i ? 'on' : ''}`} onClick=${() => setTab(i)}>${label}</button>`)}
+      </div>
+      <div class="emoji-pick">
+        ${groups[tab][1].map((e) => html`
+          <button class=${value === e ? 'on' : ''} onClick=${() => onPick(e)} aria-label=${`아이콘 ${e}`}>${e}</button>`)}
+      </div>
+      <div class="emoji-custom">
+        <span class="emoji-now">${value || '?'}</span>
+        <input maxlength="8" placeholder="직접 입력 (키보드의 😀 이모지)"
+          value=${groups.some(([, list]) => list.includes(value)) ? '' : value}
+          onInput=${(e) => { const v = e.target.value.trim(); if (v) onPick(v); }} />
+      </div>
+    </div>`;
+}
 
 function ChoreEditor({ fid, chore, children, count, onClose }) {
   const isNew = !chore.id;
@@ -623,12 +655,9 @@ function ChoreEditor({ fid, chore, children, count, onClose }) {
           <button class=${kind === k ? 'on' : ''} onClick=${() => set('kind', k)}>${v.label}</button>`)}
       </div>
       <p class="hint">${KINDS[kind].desc}</p>
-      <label class="field">아이콘
-        <div class="emoji-pick">
-          ${EMOJIS.map((e) => html`
-            <button class=${f.emoji === e ? 'on' : ''} onClick=${() => set('emoji', e)}>${e}</button>`)}
-        </div>
-      </label>
+      <div class="field">아이콘
+        <${EmojiPicker} value=${f.emoji} onPick=${(e) => set('emoji', e)} />
+      </div>
       <label class="field">이름
         <input maxlength="20" placeholder="예: 설거지" value=${f.name} onInput=${(e) => set('name', e.target.value)} />
       </label>
@@ -646,7 +675,7 @@ function ChoreEditor({ fid, chore, children, count, onClose }) {
           ${priceKids.map((c) => html`
             <div class="price-row" key=${c.id}>
               <span>${c.name}</span>
-              <input type="number" inputmode="numeric" min="10" step="100" placeholder=${`${Number(f.price) || 0}`}
+              <input type="number" inputmode="numeric" min="10" step="100" placeholder=${`기본 ${Number(f.price) || 0}`}
                 value=${f.prices[c.id] ?? ''} onInput=${(e) => setPrice(c.id, e.target.value)} />
               <span class="muted small">원</span>
             </div>`)}
@@ -1006,7 +1035,12 @@ function HistoryTab({ requests, members, onlyChild }) {
 
 /* ───────── 자녀: 홈 ───────── */
 
-const GOAL_EMOJIS = ['🎯', '🎧', '🎮', '👟', '📱', '⌚', '🚲', '📚', '⚽', '🎁'];
+const GOAL_EMOJI_GROUPS = [
+  ['전자기기', ['🎧', '🎮', '📱', '⌚', '💻', '📷', '🕹️', '🔊', '⌨️', '🖱️', '📺', '🎙️', '🔋', '💾']],
+  ['옷·물건', ['👟', '👕', '🧢', '🎒', '👜', '🕶️', '💍', '👓', '🧸', '🎁', '💄', '🪀', '🛹', '🧩']],
+  ['취미·운동', ['⚽', '🏀', '⚾', '🏸', '🎾', '🚲', '🛴', '🎸', '🎹', '🎨', '📚', '🎣', '🏕️', '🎬']],
+  ['기타', ['🎯', '💰', '🐶', '🍕', '🍰', '✈️', '🎢', '🎟️', '⭐', '🏆', '❤️', '🎉', '🌈', '✨']],
+];
 
 function GoalCard({ me, requests, onEdit }) {
   const p = goalProgress(me, requests);
@@ -1057,9 +1091,7 @@ function GoalModal({ fid, me, onClose }) {
 
   return html`
     <${Modal} title="저축 목표" onClose=${onClose}>
-      <div class="emoji-pick">
-        ${GOAL_EMOJIS.map((e) => html`<button class=${f.emoji === e ? 'on' : ''} onClick=${() => set('emoji', e)}>${e}</button>`)}
-      </div>
+      <${EmojiPicker} value=${f.emoji} groups=${GOAL_EMOJI_GROUPS} onPick=${(e) => set('emoji', e)} />
       <label class="field">무엇을 살까요?
         <input maxlength="20" placeholder="예: 무선 이어폰" value=${f.name} onInput=${(e) => set('name', e.target.value)} />
       </label>

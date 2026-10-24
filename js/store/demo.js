@@ -196,9 +196,9 @@ export default {
       Object.assign(req, decided, { status: 'rejected', reason });
     } else {
       const member = f.members[req.childId];
-      const { balance, serviceRemaining, serviceUsed } = approvalEffect(req, member);
-      Object.assign(member, { balance, serviceRemaining });
-      Object.assign(req, decided, { status: 'approved', balanceAfter: balance, serviceUsed });
+      const { serviceUsed, ...memberPatch } = approvalEffect(req, member);
+      Object.assign(member, memberPatch);
+      Object.assign(req, decided, { status: 'approved', balanceAfter: memberPatch.balance, serviceUsed });
       const chore = f.chores[req.choreId];
       if (req.choreKind === 'mission' && chore) Object.assign(chore, { done: true, doneBy: req.childId, doneAt: Date.now() });
     }

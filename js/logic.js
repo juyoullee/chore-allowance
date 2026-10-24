@@ -168,15 +168,21 @@ export function checkPayout(member, requests, amount) {
   return null;
 }
 
-// 승인했을 때 자녀 계정이 어떻게 바뀌는지 계산한다.
-// - 집안일 봉사가 남아 있으면 용돈 집안일은 무급으로 처리하고 봉사 횟수를 1 줄인다 (특별 미션은 제외).
+// 승인했을 때 자녀 계정이 어떻게 바뀌는지 계산한다. serviceUsed 외의 값은 자녀 계정에 그대로 저장한다.
+// - 집안일 봉사가 남아 있으면 그날 첫 용돈 집안일은 무급으로 처리하고 봉사를 1 줄인다 (하루 1회, 특별 미션 제외).
+//   같은 날 두 번째 집안일부터는 평소처럼 용돈이 쌓인다. 날짜는 집안일을 한(요청한) 날 기준.
 // - 잔액은 마이너스가 될 수 없다.
 export function approvalEffect(req, member) {
   if (req.status !== 'pending') throw new Error('이미 처리된 요청이에요.');
   const balance = member.balance || 0;
   const service = member.serviceRemaining || 0;
-  if (req.type === 'chore' && req.choreKind !== 'mission' && service > 0) {
-    return { balance, serviceRemaining: service - 1, serviceUsed: true };
+  const day = startOfDay(req.createdAt);
+  if (req.type === 'chore' && req.choreKind !== 'mission' && service > 0 && member.serviceLastDay !== day) {
+    const left = service - 1;
+    return {
+      balance, serviceRemaining: left, serviceLastDay: day, serviceUsed: true,
+      ...(left === 0 ? { serviceDueAt: null } : {}),
+    };
   }
   const after = balance + (req.type === 'payout' ? -req.amount : req.amount);
   if (after < 0) throw new Error('잔액이 부족해서 승인할 수 없어요.');
@@ -291,14 +297,31 @@ export function ruleEffect(rule) {
   return `${RULE_TYPES.warning.icon} 경고`;
 }
 
-// count가 음수면 집안일 봉사를 줄인다 (해제).
-export function serviceRecord(member, count, reason) {
+// count가 음수면 집안일 봉사를 줄인다 (해제). dueAt은 남은 봉사를 모두 끝낼 기한 (그날 23:59).
+export function serviceRecord(member, count, reason, dueAt = null) {
   if (!Number.isInteger(count) || count === 0) throw new Error('봉사 횟수를 입력해 주세요.');
   const remaining = Math.max(0, (member.serviceRemaining || 0) + count);
+  const due = remaining > 0 ? (dueAt ?? member.serviceDueAt ?? null) : null;
   return {
-    patch: { serviceRemaining: remaining },
-    record: { type: 'service', amount: 0, count, reason, serviceAfter: remaining },
+    patch: { serviceRemaining: remaining, serviceDueAt: due },
+    record: { type: 'service', amount: 0, count, reason, serviceAfter: remaining, dueAt: due },
   };
+}
+
+// 하루 1회씩 하면 남은 봉사를 끝내는 데 걸리는 날 + 하루 여유를 기본 기한으로 한다.
+export function defaultServiceDue(remaining, now = Date.now()) {
+  const d = new Date(addDays(startOfDay(now), Math.max(1, remaining)));
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+
+// 오늘 봉사 상태: done(오늘 봉사로 처리됨) / pending(오늘 한 집안일이 승인 대기) / todo(아직 안 함)
+export function serviceTodayState(member, requests, now = Date.now()) {
+  const today = startOfDay(now);
+  if (member.serviceLastDay === today) return 'done';
+  const waiting = requests.some((r) => r.childId === member.id && r.type === 'chore' && r.choreKind !== 'mission'
+    && r.status === 'pending' && startOfDay(r.createdAt) === today);
+  return waiting ? 'pending' : 'todo';
 }
 
 export function errorMessage(e) {

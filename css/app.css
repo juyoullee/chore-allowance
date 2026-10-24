@@ -235,6 +235,8 @@ main { padding: 4px 16px calc(96px + env(safe-area-inset-bottom)); }
 
 /* 집안일 봉사 */
 .service-card { display: flex; align-items: center; gap: 12px; border: 1.5px solid #c4b5fd; background: rgba(237, 233, 254, .5); }
+.overdue { color: var(--minus); font-weight: 700; }
+.service-card.overdue-card { border-color: var(--minus); background: rgba(254, 226, 226, .45); }
 .tag.service { background: #ede9fe; color: #6d28d9; border-color: transparent; font-weight: 700; }
 .balance-note { font-size: 12px; text-align: center; margin-top: 8px; opacity: .92; }
 .btn.reopen { margin-top: 8px; }

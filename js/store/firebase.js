@@ -274,7 +274,8 @@ export default {
     await runTransaction(D(), async (tx) => {
       const rSnap = await tx.get(rRef);
       if (!rSnap.exists()) throw new Error('요청을 찾을 수 없어요.');
-      const req = rSnap.data();
+      const data = rSnap.data();
+      const req = { ...data, createdAt: data.createdAt?.toMillis?.() ?? Date.now() };
       if (req.status !== 'pending') throw new Error('이미 처리된 요청이에요.');
       const decided = { decidedAt: serverTimestamp(), decidedBy: uid };
       if (!approve) {
@@ -283,9 +284,9 @@ export default {
       }
       const mRef = famRef(fid, 'members', req.childId);
       const mSnap = await tx.get(mRef);
-      const { balance, serviceRemaining, serviceUsed } = approvalEffect(req, mSnap.data());
-      tx.update(mRef, { balance, serviceRemaining });
-      tx.update(rRef, { ...decided, status: 'approved', balanceAfter: balance, serviceUsed });
+      const { serviceUsed, ...memberPatch } = approvalEffect(req, mSnap.data());
+      tx.update(mRef, memberPatch);
+      tx.update(rRef, { ...decided, status: 'approved', balanceAfter: memberPatch.balance, serviceUsed });
       // 특별 미션은 한 번 승인되면 끝난다.
       if (req.choreKind === 'mission') {
         tx.update(famRef(fid, 'chores', req.choreId), { done: true, doneBy: req.childId, doneAt: serverTimestamp() });

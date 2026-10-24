@@ -168,13 +168,31 @@ export function checkPayout(member, requests, amount) {
   return null;
 }
 
-/* ───────── 집안일 봉사 (위반 1건 = 봉사 항목 1개) ───────── */
+/* ───────── 집안일 봉사 (위반 1건 = 봉사 카드 1장) ─────────
+   카드마다 '하루 횟수(perDay)'가 있고, 시작일부터 기한까지 매일 그만큼 한다.
+   총 횟수(count) = 하루 횟수 × 날수. 그날 몫을 채우면 그다음 집안일은 평소처럼 용돈이 쌓인다. */
 
-// 자녀의 봉사 항목 목록. 예전 버전(합계 숫자만 저장)은 항목 하나로 보여 준다.
+// 자녀의 봉사 카드 목록. 예전 버전(합계 숫자만 저장)은 카드 하나로 보여 준다.
 export function servicesOf(member) {
   if (Array.isArray(member.services)) return member.services;
   const n = member.serviceRemaining || 0;
-  return n > 0 ? [{ id: 'legacy', reason: '생활 약속 위반', count: n, remaining: n, dueAt: member.serviceDueAt ?? null, createdAt: 0 }] : [];
+  return n > 0 ? [{
+    id: 'legacy', reason: '생활 약속 위반', count: n, remaining: n, perDay: 1, startDay: 0,
+    dueAt: member.serviceDueAt ?? null, createdAt: 0,
+  }] : [];
+}
+
+export const perDayOf = (s) => s.perDay || 1;
+// 이 카드를 그날 해야 하는지 (시작일 ~ 기한, 남은 횟수 있음)
+const activeOn = (s, day) => s.remaining > 0 && (s.startDay || 0) <= day && (!s.dueAt || day <= startOfDay(s.dueAt));
+// 이 카드로 그날 이미 한 횟수
+export const doneOn = (s, day) => (s.lastDay === day ? s.dayDone || 0 : 0);
+
+// 그날 봉사로 채울 카드: 오늘 몫이 남은 카드 중 기한이 이른 것, 먼저 생긴 것부터. 없으면 null.
+export function serviceTarget(member, day) {
+  return [...servicesOf(member)]
+    .filter((s) => activeOn(s, day) && doneOn(s, day) < perDayOf(s))
+    .sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity) || a.createdAt - b.createdAt)[0] || null;
 }
 
 // 항목 목록으로 자녀 계정에 저장할 값을 만든다. 합계(serviceRemaining)와 가장 이른 기한도 함께 맞춘다.
@@ -188,24 +206,21 @@ function servicePatch(items) {
   };
 }
 
-// 봉사를 채울 때는 기한이 이른 것, 먼저 생긴 것부터
-const nextServiceItem = (items) => [...items].filter((s) => s.remaining > 0)
-  .sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity) || a.createdAt - b.createdAt)[0];
-
 // 승인했을 때 자녀 계정이 어떻게 바뀌는지 계산한다. serviceUsed 외의 값은 자녀 계정에 그대로 저장한다.
-// - 집안일 봉사가 남아 있으면 그날 첫 용돈 집안일은 무급으로 처리하고 봉사를 1 줄인다 (하루 1회, 특별 미션 제외).
-//   같은 날 두 번째 집안일부터는 평소처럼 용돈이 쌓인다. 날짜는 집안일을 한(요청한) 날 기준.
+// - 그날(집안일을 한 날) 봉사 몫이 남아 있으면 용돈 집안일은 무급(봉사)으로 처리한다 (특별 미션 제외).
+//   그날 몫을 다 채운 뒤의 집안일은 평소처럼 용돈이 쌓인다.
 // - 잔액은 마이너스가 될 수 없다.
 export function approvalEffect(req, member) {
   if (req.status !== 'pending') throw new Error('이미 처리된 요청이에요.');
   const balance = member.balance || 0;
   const service = member.serviceRemaining || 0;
   const day = startOfDay(req.createdAt);
-  if (req.type === 'chore' && req.choreKind !== 'mission' && service > 0 && member.serviceLastDay !== day) {
-    const items = servicesOf(member);
-    const target = nextServiceItem(items);
-    const next = items.map((s) => (s.id === target.id ? { ...s, remaining: s.remaining - 1 } : s));
-    return { balance, serviceLastDay: day, serviceUsed: true, ...servicePatch(next) };
+  const target = req.type === 'chore' && req.choreKind !== 'mission' && serviceTarget(member, day);
+  if (target) {
+    const next = servicesOf(member).map((s) => (s.id === target.id
+      ? { ...s, remaining: s.remaining - 1, lastDay: day, dayDone: doneOn(s, day) + 1 }
+      : s));
+    return { balance, serviceUsed: true, ...servicePatch(next) };
   }
   const after = balance + (req.type === 'payout' ? -req.amount : req.amount);
   if (after < 0) throw new Error('잔액이 부족해서 승인할 수 없어요.');
@@ -316,43 +331,55 @@ export const rulesNoteOf = (family) => family?.rulesNote ?? DEFAULT_RULES_NOTE;
 
 export function ruleEffect(rule) {
   if (rule.type === 'money') return `${RULE_TYPES.money.icon} ${won(rule.amount)} 차감`;
-  if (rule.type === 'service') return `${RULE_TYPES.service.icon} 집안일 봉사 ${rule.count}회`;
+  if (rule.type === 'service') return `${RULE_TYPES.service.icon} 집안일 봉사 하루 ${rule.count}회`;
   return `${RULE_TYPES.warning.icon} 경고`;
 }
 
-// 집안일 봉사 부여. count가 음수면 남은 봉사를 모두 없앤다 (해제).
-// pieces > 1이면 위반 건마다 항목을 따로 만든다 (예: 2건 × 2회 → "1건째", "2건째" 항목 2개).
-// dueAt은 그 봉사를 끝낼 기한 (그날 23:59).
-export function serviceRecord(member, count, reason, dueAt = null, pieces = 1) {
-  if (!Number.isInteger(count) || count === 0) throw new Error('봉사 횟수를 입력해 주세요.');
+// 오늘부터 기한(그날 포함)까지 며칠인지. 기한이 없거나 오늘이면 1일.
+export function serviceDays(dueAt, now = Date.now()) {
+  if (!dueAt) return 1;
+  return Math.max(1, Math.round((startOfDay(dueAt) - startOfDay(now)) / 86400000) + 1);
+}
+
+// 집안일 봉사 부여: 카드마다 '하루 perDay회 × 오늘부터 기한까지 날수'.
+// pieces > 1이면 위반 건마다 카드를 따로 만든다 (예: 중대 사안 2건 → 카드 2장, 각각 매일 perDay회).
+// perDay가 음수면 남은 봉사를 모두 없앤다 (해제). dueAt은 마지막 날 23:59.
+export function serviceRecord(member, perDay, reason, dueAt = null, pieces = 1) {
+  if (!Number.isInteger(perDay) || perDay === 0) throw new Error('봉사 횟수를 입력해 주세요.');
   const items = servicesOf(member);
   let next;
-  if (count < 0) {
+  let added = 0;
+  if (perDay < 0) {
     next = [];
   } else {
-    const each = Math.floor(count / pieces);
     const now = Date.now();
-    const added = Array.from({ length: pieces }, (_, i) => ({
+    const count = perDay * serviceDays(dueAt, now);
+    const cards = Array.from({ length: pieces }, (_, i) => ({
       id: `s-${now.toString(36)}-${i}-${Math.random().toString(36).slice(2, 6)}`,
       reason: pieces > 1 ? `${reason} · ${i + 1}건째` : reason,
-      count: i === pieces - 1 ? count - each * (pieces - 1) : each,
+      perDay,
+      count,
+      remaining: count,
+      startDay: startOfDay(now),
       dueAt,
       createdAt: now + i,
-    })).map((s) => ({ ...s, remaining: s.count }));
-    next = [...items, ...added];
+    }));
+    added = count * pieces;
+    next = [...items, ...cards];
   }
   const patch = servicePatch(next);
   return {
     patch,
     record: {
-      type: 'service', amount: 0, count: count < 0 ? -(member.serviceRemaining || 0) : count,
+      type: 'service', amount: 0, count: perDay < 0 ? -(member.serviceRemaining || 0) : added,
       reason: pieces > 1 ? `${reason} (${pieces}건)` : reason, serviceAfter: patch.serviceRemaining, dueAt,
     },
   };
 }
 
-// 봉사 항목 하나를 고치거나(남은 횟수·사유·기한) 종료한다.
-export function serviceItemChange(member, itemId, { reason, remaining, dueAt, close = false }) {
+// 봉사 카드 하나를 고치거나(사유·하루 횟수·기한) 종료한다.
+// 하루 횟수나 기한을 바꾸면 '오늘부터 기한까지' 남은 횟수를 다시 계산한다 (오늘 이미 한 것은 빼고).
+export function serviceItemChange(member, itemId, { reason, perDay, dueAt, close = false }, now = Date.now()) {
   const items = servicesOf(member);
   const item = items.find((s) => s.id === itemId);
   if (!item) throw new Error('이미 끝난 봉사예요.');
@@ -364,10 +391,15 @@ export function serviceItemChange(member, itemId, { reason, remaining, dueAt, cl
     delta = -item.remaining;
     note = `${item.reason} 종료`;
   } else {
-    if (!Number.isInteger(remaining) || remaining < 0 || remaining > 100) throw new Error('남은 횟수는 0~100 사이로 입력해 주세요.');
+    const per = Number(perDay);
+    if (!Number.isInteger(per) || per < 1 || per > 20) throw new Error('하루 횟수는 1~20회로 정해 주세요.');
     const name = (reason || '').trim() || item.reason;
+    const due = dueAt ?? item.dueAt;
+    const today = startOfDay(now);
+    // 오늘부터 기한까지 해야 할 횟수 - 오늘 이미 한 횟수
+    const remaining = Math.max(0, per * serviceDays(due, now) - doneOn(item, today));
     next = items.map((s) => (s.id === itemId
-      ? { ...s, reason: name, remaining, count: Math.max(s.count, remaining), dueAt: dueAt ?? s.dueAt }
+      ? { ...s, reason: name, perDay: per, dueAt: due, remaining, count: (s.count - s.remaining) + remaining }
       : s));
     delta = remaining - item.remaining;
     note = remaining === 0 ? `${name} 종료` : `${name} 수정`;
@@ -376,20 +408,31 @@ export function serviceItemChange(member, itemId, { reason, remaining, dueAt, cl
   return { patch, record: { type: 'service', amount: 0, count: delta, reason: note, serviceAfter: patch.serviceRemaining } };
 }
 
-// 하루 1회씩 하면 남은 봉사를 끝내는 데 걸리는 날 + 하루 여유를 기본 기한으로 한다.
-export function defaultServiceDue(remaining, now = Date.now()) {
-  const d = new Date(addDays(startOfDay(now), Math.max(1, remaining)));
+// 기본 기한: 오늘부터 days일째 되는 날 23:59 (days=1이면 오늘)
+export function defaultServiceDue(days, now = Date.now()) {
+  const d = new Date(addDays(startOfDay(now), Math.max(1, days) - 1));
   d.setHours(23, 59, 59, 999);
   return d.getTime();
 }
 
-// 오늘 봉사 상태: done(오늘 봉사로 처리됨) / pending(오늘 한 집안일이 승인 대기) / todo(아직 안 함)
-export function serviceTodayState(member, requests, now = Date.now()) {
+// 오늘 봉사 현황. quota: 오늘 해야 할 횟수, done: 오늘 한 횟수, pending: 오늘 한 집안일 중 승인 대기.
+// state: none(오늘은 할 봉사 없음) / done(오늘 몫 완료) / pending(승인만 되면 완료) / todo(아직 남음)
+export function serviceToday(member, requests, now = Date.now()) {
   const today = startOfDay(now);
-  if (member.serviceLastDay === today) return 'done';
-  const waiting = requests.some((r) => r.childId === member.id && r.type === 'chore' && r.choreKind !== 'mission'
-    && r.status === 'pending' && startOfDay(r.createdAt) === today);
-  return waiting ? 'pending' : 'todo';
+  let quota = 0;
+  let done = 0;
+  for (const s of servicesOf(member)) {
+    const d = doneOn(s, today);
+    done += d;
+    if (activeOn(s, today) || d > 0) quota += Math.min(perDayOf(s), d + s.remaining);
+  }
+  const pending = requests.filter((r) => r.childId === member.id && r.type === 'chore' && r.choreKind !== 'mission'
+    && r.status === 'pending' && startOfDay(r.createdAt) === today).length;
+  let state = 'todo';
+  if (quota === 0) state = 'none';
+  else if (done >= quota) state = 'done';
+  else if (done + pending >= quota) state = 'pending';
+  return { state, quota, done, pending };
 }
 
 export function errorMessage(e) {

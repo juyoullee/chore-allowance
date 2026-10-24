@@ -240,6 +240,10 @@ main { padding: 4px 16px calc(96px + env(safe-area-inset-bottom)); }
   background: #ede9fe; color: #4c1d95; border-radius: var(--radius); padding: 10px 14px; margin-bottom: 10px; font-size: 14px;
 }
 .service-summary .small { margin-top: 2px; }
+.service-today { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #6d28d9; }
+.service-today .service-dots { margin-top: 0; }
+.service-calc { display: block; margin-top: 6px; font-weight: 400; color: #6d28d9; font-size: 13px; }
+.bar.thin { height: 6px; margin: 8px 0 0; }
 .service-dots { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .service-dots span { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #a78bfa; }
 .service-dots span.on { background: #7c3aed; border-color: #7c3aed; }

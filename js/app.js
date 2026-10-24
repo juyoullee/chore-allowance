@@ -5,13 +5,13 @@ import {
   todayCount, pendingPayoutSum, checkPayout, choreVisibleTo, errorMessage,
   KINDS, choreKind, missionRequest, isOverdue, dueLabel, dateInputToDue, dueToDateInput, goalProgress,
   settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, serviceRecord, priceFor, targetsChild,
-  RULE_TYPES, rulesOf, rulesNoteOf, ruleEffect, defaultServiceDue, serviceTodayState, servicesOf, serviceItemChange,
+  RULE_TYPES, rulesOf, rulesNoteOf, ruleEffect, defaultServiceDue, serviceToday, servicesOf, serviceItemChange, serviceTarget, serviceDays, perDayOf, doneOn,
 } from './logic.js';
 
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v9 (10/24)';
+const APP_VERSION = 'v10 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -410,9 +410,14 @@ function Shell({ fid, family, me, tabs, tab, setTab, children }) {
 
 // 집안일 봉사 한 줄 요약: 남은 횟수 · 기한 · 오늘 했는지 (부모 화면용)
 function ServiceStatus({ member, requests }) {
-  const today = serviceTodayState(member, requests);
+  const t = serviceToday(member, requests);
   const overdue = member.serviceDueAt && Date.now() > member.serviceDueAt;
-  const todayText = { done: '오늘 완료 ✓', pending: '오늘 승인 대기', todo: '오늘 아직 안 함' }[today];
+  const todayText = {
+    none: '오늘은 할 봉사 없음',
+    done: `오늘 ${t.done}/${t.quota}회 완료 ✓`,
+    pending: `오늘 ${t.done}/${t.quota}회 (승인 대기 ${t.pending})`,
+    todo: `오늘 ${t.done}/${t.quota}회`,
+  }[t.state];
   const dueText = member.serviceDueAt && (overdue ? '기한 지남' : `기한 ${dueLabel(member.serviceDueAt)}`);
   return html`
     <div class="small service-text">🤝 집안일 봉사 ${member.serviceRemaining}회 남음${dueText && ' · '}${dueText
@@ -444,12 +449,12 @@ function DutyStatus({ chores, members, requests }) {
 }
 
 // 승인 카드 아래에 붙는 안내 (지급, 봉사 처리, 연속 보너스)
-function ApproveHint({ r, member, requests, chores, family }) {
+function ApproveHint({ r, member, requests, chores, family, asService }) {
   if (r.type === 'payout') {
     return html`<p class="hint">현재 잔액 ${won(member?.balance)} · 용돈을 실제로 준 다음 승인하세요.</p>`;
   }
-  if (r.type === 'chore' && r.choreKind !== 'mission' && member?.serviceRemaining > 0 && member.serviceLastDay !== startOfDay(r.createdAt)) {
-    return html`<p class="hint service-hint">🤝 집안일 봉사가 ${member.serviceRemaining}회 남아 있어서 승인하면 <b>무급(봉사)</b>으로 처리돼요.</p>`;
+  if (asService) {
+    return html`<p class="hint service-hint">🤝 그날 해야 할 집안일 봉사 몫이라 승인하면 <b>무급(봉사)</b>으로 처리돼요. (남은 총 ${member.serviceRemaining}회)</p>`;
   }
   if (r.type === 'bonus') {
     const s = streakInfo(requests, chores, r.childId, settingsOf(family).streakDays);
@@ -463,7 +468,16 @@ function ApproveTab({ fid, requests, members, chores, family }) {
   const pending = requests.filter((r) => r.status === 'pending').sort((a, b) => a.createdAt - b.createdAt);
   const memberOf = (id) => members.find((m) => m.id === id);
   const duty = html`<${DutyStatus} chores=${chores} members=${members} requests=${requests} />`;
-  const asService = (r) => { const m = memberOf(r.childId); return r.type === 'chore' && r.choreKind !== 'mission' && m?.serviceRemaining > 0 && m.serviceLastDay !== startOfDay(r.createdAt); };
+  // 승인하면 봉사로 처리될지: 그날 몫(quota) - 이미 한 것(done) 이 같은 날 먼저 들어온 대기 요청 수보다 많으면 봉사
+  const asService = (r) => {
+    const m = memberOf(r.childId);
+    if (r.type !== 'chore' || r.choreKind === 'mission' || !m) return false;
+    const day = startOfDay(r.createdAt);
+    const { quota, done } = serviceToday(m, [], r.createdAt);
+    const before = pending.filter((x) => x.childId === r.childId && x.type === 'chore' && x.choreKind !== 'mission'
+      && startOfDay(x.createdAt) === day && x.createdAt < r.createdAt).length;
+    return done + before < quota;
+  };
   const okMsg = (r) => {
     if (r.type === 'payout') return '지급 완료로 기록했어요.';
     if (asService(r)) return '봉사 1회로 처리했어요.';
@@ -486,7 +500,7 @@ function ApproveTab({ fid, requests, members, chores, family }) {
           <${Amount} r=${r} />
         </div>
         ${r.memo && html`<div class="memo">“${r.memo}”</div>`}
-        <${ApproveHint} r=${r} member=${memberOf(r.childId)} requests=${requests} chores=${chores} family=${family} />
+        <${ApproveHint} r=${r} member=${memberOf(r.childId)} requests=${requests} chores=${chores} family=${family} asService=${asService(r)} />
         <div class="actions">
           <button class="btn" onClick=${() => setRejecting(r)}>반려</button>
           <button class="btn primary" onClick=${() => run(() => store.decide(fid, r.id, true), okMsg(r))}>
@@ -819,7 +833,7 @@ function FamilyTab({ fid, family, members, requests, chores }) {
       <div class="row-item"><span class="emoji small">🔥</span>
         <div class="grow">기본 할 일 연속 완료 보너스</div><b>${settings.streakDays}일 연속이면 ${won(settings.streakBonus)}</b></div>
       <div class="row-item"><span class="emoji small">🤝</span>
-        <div class="grow">중대 사안 (조치 확정 1건당)</div><b>집안일 봉사 ${settings.violencePerCase}회</b></div>
+        <div class="grow">중대 사안 (조치 확정 1건당)</div><b>매일 집안일 봉사 ${settings.violencePerCase}회</b></div>
     </div>
 
     ${penaltyFor && html`
@@ -897,21 +911,20 @@ function PenaltyModal({ fid, child, onClose }) {
     <//>`;
 }
 
-// 집안일 봉사 기한 입력. 직접 고치기 전에는 '하루 1회씩 + 하루 여유'로 자동 계산한다.
-function useServiceDue(totalAfter) {
+// 집안일 봉사 기한 입력. 직접 고치기 전에는 defaultDays일째 되는 날로 정해 둔다.
+function useServiceDue(defaultDays) {
   const [picked, setPicked] = useState(null);
-  const value = picked ?? dueToDateInput(defaultServiceDue(totalAfter));
+  const value = picked ?? dueToDateInput(defaultServiceDue(defaultDays));
   return [value, setPicked];
 }
 
-function ServiceDueField({ totalAfter, value, onChange }) {
-  const due = dateInputToDue(value);
-  const days = due ? Math.round((startOfDay(due) - startOfDay()) / 86400000) + 1 : 0;
+// 기한 + "매일 n회 × d일 = 총 N회" 계산 보여 주기
+function ServiceDueField({ dailyTotal, value, onChange }) {
+  const days = serviceDays(dateInputToDue(value));
   return html`
-    <label class="field">기한 (이 날까지 하루 1회씩)
+    <label class="field">기한 (이 날까지 매일)
       <input type="date" value=${value} min=${dueToDateInput(Date.now())} onInput=${(e) => onChange(e.target.value)} />
-      ${due && days < totalAfter && html`
-        <span class="error small">하루 1회씩이면 최소 ${totalAfter}일이 걸려요. 기한이 짧아요.</span>`}
+      <span class="service-calc">매일 ${dailyTotal}회 × ${days}일 = 총 <b>${dailyTotal * days}회</b></span>
     </label>`;
 }
 
@@ -921,22 +934,25 @@ function ServiceModal({ fid, child, settings, onClose, initialMode = 'normal' })
   const [count, setCount] = useState('1');
   const [cases, setCases] = useState('1');
   const remaining = child.serviceRemaining || 0;
-  const total = mode === 'violence' ? (Number(cases) || 0) * settings.violencePerCase : Number(count);
-  const totalAfter = remaining + Math.max(0, Number.isInteger(total) ? total : 0);
-  const [due, setDue] = useServiceDue(totalAfter);
+  const violence = mode === 'violence';
+  // 카드 한 장의 하루 횟수, 카드 장수 (중대 사안은 건마다 카드 1장)
+  const perDay = violence ? settings.violencePerCase : Number(count);
+  const pieces = violence ? Number(cases) || 0 : 1;
+  const dailyTotal = Number.isInteger(perDay) && perDay > 0 ? perDay * pieces : 0;
+  const [due, setDue] = useServiceDue(violence ? 7 : 1);
   const [editItem, setEditItem] = useState(null);
   const editing = editItem && servicesOf(child).find((s) => s.id === editItem);
 
   const submit = async () => {
     // 중대 사안(학교에서 조치가 확정된 일)은 사건 내용 없이 중립적인 표현으로만 기록한다.
-    const why = mode === 'violence' ? '생활 약속 위반' : reason.trim();
-    const pieces = mode === 'violence' ? Number(cases) || 1 : 1; // 중대 사안은 건마다 카드 1장
+    const why = violence ? '생활 약속 위반' : reason.trim();
     if (!why) return toast('이유를 적어 주세요.');
-    if (!Number.isInteger(total) || total <= 0 || total > 100) return toast('횟수는 1~100 사이로 입력해 주세요.');
+    if (!Number.isInteger(perDay) || perDay < 1 || perDay > 20) return toast('하루 횟수는 1~20회로 정해 주세요.');
+    if (!Number.isInteger(pieces) || pieces < 1 || pieces > 10) return toast('건수는 1~10건으로 입력해 주세요.');
     const dueAt = dateInputToDue(due);
     if (!dueAt || dueAt < Date.now()) return toast('기한은 오늘이나 그 뒤 날짜로 정해 주세요.');
-    const ok = await run(() => store.addRecord(fid, child.id, (m) => serviceRecord(m, total, why, dueAt, pieces)),
-      `집안일 봉사 ${total}회를 부여했어요.`);
+    const ok = await run(() => store.addRecord(fid, child.id, (m) => serviceRecord(m, perDay, why, dueAt, pieces)),
+      `매일 ${dailyTotal}회 집안일 봉사를 부여했어요.`);
     if (ok) onClose();
   };
   const clear = async () => {
@@ -954,7 +970,7 @@ function ServiceModal({ fid, child, settings, onClose, initialMode = 'normal' })
       <p class="muted">지금 남은 봉사: <b>${remaining}회</b>${servicesOf(child).length ? ` · 생활 약속 위반 ${servicesOf(child).length}건` : ''}</p>
       ${servicesOf(child).map((item) => html`
         <${ServiceItemCard} key=${item.id} item=${item} onOpen=${() => setEditItem(item.id)} />`)}
-      <p class="hint">봉사는 <b>하루 1회씩</b> 해요. 그날 처음 승인되는 용돈 집안일이 무급(봉사)으로 처리되고, 두 번째부터는 평소처럼 용돈이 쌓여요. 다 채울 때까지 지급 요청은 할 수 없어요.</p>
+      <p class="hint">봉사는 <b>기한까지 매일 정한 횟수만큼</b> 해요. 그날 승인되는 용돈 집안일이 그날 몫만큼 무급(봉사)으로 처리되고, 몫을 채운 뒤에는 평소처럼 용돈이 쌓여요. 봉사가 남아 있으면 지급 요청은 할 수 없어요.</p>
       <div class="seg small">
         <button class=${mode === 'normal' ? 'on' : ''} onClick=${() => setMode('normal')}>일반</button>
         <button class=${mode === 'violence' ? 'on' : ''} onClick=${() => setMode('violence')}>중대 사안</button>
@@ -966,16 +982,16 @@ function ServiceModal({ fid, child, settings, onClose, initialMode = 'normal' })
         </div>
         <textarea rows="2" maxlength="100" placeholder="자녀에게 보여 줄 이유" value=${reason}
           onInput=${(e) => setReason(e.target.value)}></textarea>
-        <label class="field">집안일 봉사 횟수
-          <input type="number" inputmode="numeric" min="1" step="1" value=${count} onInput=${(e) => setCount(e.target.value)} />
+        <label class="field">하루 횟수 (매일 해야 하는 봉사)
+          <input type="number" inputmode="numeric" min="1" max="20" step="1" value=${count} onInput=${(e) => setCount(e.target.value)} />
         </label>` : html`
-        <div class="banner">학교 등에서 <b>사실과 조치가 확정된 뒤</b>에만 적용하세요. 자녀 화면에는 사건 내용 없이 "생활 약속 위반"과 "집안일 봉사 n회"로만 보여요.</div>
+        <div class="banner">학교 등에서 <b>사실과 조치가 확정된 뒤</b>에만 적용하세요. 자녀 화면에는 사건 내용 없이 "생활 약속 위반"과 "집안일 봉사"로만 보여요.</div>
         <label class="field">조치가 확정된 건수
-          <input type="number" inputmode="numeric" min="1" step="1" value=${cases} onInput=${(e) => setCases(e.target.value)} />
+          <input type="number" inputmode="numeric" min="1" max="10" step="1" value=${cases} onInput=${(e) => setCases(e.target.value)} />
         </label>
-        <p class="muted">1건당 ${settings.violencePerCase}회 → <b>집안일 봉사 ${total}회</b></p>`}
-      <${ServiceDueField} totalAfter=${totalAfter} value=${due} onChange=${setDue} />
-      <button class="btn primary block" onClick=${submit}>집안일 봉사 ${total > 0 ? total : ''}회 부여</button>
+        <p class="muted">1건당 매일 ${settings.violencePerCase}회 → <b>매일 ${dailyTotal}회</b> (카드 ${pieces || 0}장)</p>`}
+      <${ServiceDueField} dailyTotal=${dailyTotal} value=${due} onChange=${setDue} />
+      <button class="btn primary block" onClick=${submit}>매일 ${dailyTotal || ''}회 집안일 봉사 부여</button>
       ${remaining > 0 && html`<button class="btn danger-ghost block" onClick=${clear}>남은 집안일 봉사 해제</button>`}
     <//>`;
 }
@@ -991,7 +1007,7 @@ function SettingsModal({ fid, settings, onClose }) {
     };
     if (!Number.isInteger(next.streakDays) || next.streakDays < 2 || next.streakDays > 60) return toast('연속 일수는 2~60일로 정해 주세요.');
     if (!Number.isInteger(next.streakBonus) || next.streakBonus < 10) return toast('보너스는 10원 이상으로 정해 주세요.');
-    if (!Number.isInteger(next.violencePerCase) || next.violencePerCase < 1 || next.violencePerCase > 20) return toast('1건당 봉사 횟수는 1~20회로 정해 주세요.');
+    if (!Number.isInteger(next.violencePerCase) || next.violencePerCase < 1 || next.violencePerCase > 20) return toast('1건당 하루 봉사 횟수는 1~20회로 정해 주세요.');
     if (await run(() => store.updateFamily(fid, { settings: next }), '규칙을 저장했어요.')) onClose();
   };
   return html`
@@ -1002,7 +1018,7 @@ function SettingsModal({ fid, settings, onClose }) {
       <label class="field">연속 완료 보너스 용돈 (원)
         <input type="number" inputmode="numeric" min="10" step="100" value=${f.streakBonus} onInput=${(e) => set('streakBonus', e.target.value)} />
       </label>
-      <label class="field">중대 사안 1건당 집안일 봉사 횟수
+      <label class="field">중대 사안 1건당 하루 집안일 봉사 횟수 (기한까지 매일)
         <input type="number" inputmode="numeric" min="1" value=${f.violencePerCase} onInput=${(e) => set('violencePerCase', e.target.value)} />
       </label>
       <p class="hint">그날의 '오늘의 기본 할 일'을 모두 체크하면 연속 일수가 1 늘어요. 하나라도 빠진 날이 있으면 0부터 다시 시작해요. 기본 할 일이 없는 요일은 세지 않고 넘어가요.</p>
@@ -1062,11 +1078,11 @@ function RulesTab({ fid, family, members, requests, me }) {
         <span class="emoji">🏫</span>
         <div class="grow">
           <div class="title">중대 사안</div>
-          <div class="muted small">학교 등에서 사실과 조치가 확정된 일. 1건마다 집안일 봉사를 해요.</div>
+          <div class="muted small">학교 등에서 사실과 조치가 확정된 일. 1건마다 기한까지 매일 집안일 봉사를 해요.</div>
         </div>
       </div>
       <div class="rule-foot">
-        <span class="tag rule-service">🤝 1건당 집안일 봉사 ${settings.violencePerCase}회</span>
+        <span class="tag rule-service">🤝 1건당 매일 ${settings.violencePerCase}회</span>
         ${isParent && children.length > 0 && html`
           <div class="rule-actions"><button class="btn small" onClick=${() => setApplying('major')}>적용</button></div>`}
       </div>
@@ -1115,8 +1131,8 @@ function RuleApplyModal({ fid, rule, members, onClose, onMajor }) {
   const major = rule === 'major';
   const short = !major && rule.type === 'money' && child && rule.amount > (child.balance || 0);
   const isService = !major && rule.type === 'service';
-  const totalAfter = (child?.serviceRemaining || 0) + (isService ? rule.count : 0);
-  const [due, setDue] = useServiceDue(totalAfter);
+  const dailyTotal = isService ? rule.count : 0;
+  const [due, setDue] = useServiceDue(1);
 
   const apply = async () => {
     if (!child) return toast('누구에게 적용할지 골라 주세요.');
@@ -1139,8 +1155,8 @@ function RuleApplyModal({ fid, rule, members, onClose, onMajor }) {
       ${child && !major && rule.type === 'money' && html`
         <p class="hint">잔액 ${won(child.balance)} → <b>${won(Math.max(0, (child.balance || 0) - rule.amount))}</b></p>`}
       ${child && !major && rule.type === 'service' && html`
-        <p class="hint service-hint">남은 집안일 봉사 ${child.serviceRemaining || 0}회 → <b>${totalAfter}회</b> (하루 1회씩)</p>
-        <${ServiceDueField} totalAfter=${totalAfter} value=${due} onChange=${setDue} />`}
+        <p class="hint service-hint">규칙의 봉사 횟수는 <b>하루 횟수</b>예요. 기한을 늘리면 그날까지 매일 해야 해요.</p>
+        <${ServiceDueField} dailyTotal=${dailyTotal} value=${due} onChange=${setDue} />`}
       ${short && html`<p class="error">잔액이 ${won(child.balance)}이라 ${won(rule.amount)}을 뺄 수 없어요. 가족 탭의 차감에서 금액을 직접 정할 수 있어요.</p>`}
       <button class="btn danger block" disabled=${!child || short} onClick=${apply}>${major ? '다음' : '적용하기'}</button>
     <//>`;
@@ -1439,14 +1455,19 @@ function StreakCard({ fid, me, chores, requests, settings }) {
 function ServiceItemCard({ item, who, onOpen }) {
   const overdue = item.dueAt && Date.now() > item.dueAt;
   const done = item.count - item.remaining;
+  const per = perDayOf(item);
+  const today = doneOn(item, startOfDay());
   const body = html`
     <span class="emoji">🤝</span>
     <div class="grow">
       <div class="title">${who ? `${who} · ` : ''}${item.reason}</div>
-      <div class="muted small">집안일 봉사 ${item.count}회 중 ${done}회 완료 · 매일 1회</div>
-      <div class="service-dots">
-        ${Array.from({ length: Math.min(item.count, 20) }, (_, i) => html`<span class=${i < done ? 'on' : ''}></span>`)}
+      <div class="muted small">매일 ${per}회 · 총 ${item.count}회 중 ${done}회 완료</div>
+      <div class="service-today">
+        <span class="muted small">오늘</span>
+        <span class="service-dots">${Array.from({ length: per }, (_, i) => html`<span class=${i < today ? 'on' : ''}></span>`)}</span>
+        <span class="small">${today}/${per}</span>
       </div>
+      <div class="bar thin"><div class="bar-fill" style=${`width:${item.count ? Math.round((done / item.count) * 100) : 0}%`}></div></div>
     </div>
     <div class="mission-side">
       <span class="tag service">남은 ${item.remaining}회</span>
@@ -1462,15 +1483,17 @@ function ServiceItemCard({ item, who, onOpen }) {
 // 자녀 화면 특별 미션 칸: 위반 건수·남은 봉사 요약 + 건별 카드
 function ServiceCard({ me, requests }) {
   const items = servicesOf(me);
-  const today = serviceTodayState(me, requests);
+  const t = serviceToday(me, requests);
+  const left = Math.max(0, t.quota - t.done - t.pending);
   const todayText = {
-    done: '✅ 오늘 봉사 완료! 내일 또 해요.',
-    pending: '⏳ 오늘 봉사 확인 기다리는 중',
-    todo: '👉 오늘은 아직이에요. 용돈 집안일 1개를 하면 봉사로 채워져요.',
-  }[today];
+    none: '오늘은 해야 할 봉사가 없어요.',
+    done: `✅ 오늘 봉사 ${t.quota}회 완료! 내일 또 해요.`,
+    pending: `⏳ 오늘 ${t.quota}회 중 ${t.done}회 완료, 나머지는 부모님 확인 기다리는 중`,
+    todo: `👉 오늘 ${t.quota}회 중 ${t.done}회 했어요. 용돈 집안일 ${left}개를 더 하면 오늘 몫을 채워요.`,
+  }[t.state];
   return html`
     <div class="service-summary">
-      <div><b>생활 약속 위반 ${items.length}건</b> · 집안일 봉사 남은 <b>${me.serviceRemaining}회</b></div>
+      <div><b>생활 약속 위반 ${items.length}건</b> · 오늘 봉사 <b>${t.done}/${t.quota}회</b> · 남은 총 ${me.serviceRemaining}회</div>
       <div class="small">${todayText}</div>
     </div>
     ${items.map((item) => html`<${ServiceItemCard} key=${item.id} item=${item} />`)}`;
@@ -1479,13 +1502,17 @@ function ServiceCard({ me, requests }) {
 // 부모: 봉사 카드 하나를 고치거나 종료
 function ServiceItemModal({ fid, child, item, onClose }) {
   const [reason, setReason] = useState(item.reason);
-  const [remaining, setRemaining] = useState(item.remaining);
-  const [due, setDue] = useState(dueToDateInput(item.dueAt));
+  const [perDay, setPerDay] = useState(perDayOf(item));
+  const [due, setDue] = useState(dueToDateInput(item.dueAt) || dueToDateInput(Date.now()));
+  const todayDone = doneOn(item, startOfDay());
+  // 오늘부터 기한까지 남게 될 횟수 (오늘 이미 한 것은 빼고)
+  const willRemain = Math.max(0, perDay * serviceDays(dateInputToDue(due)) - todayDone);
   const change = (patch, msg) => run(() => store.addRecord(fid, child.id, (m) => serviceItemChange(m, item.id, patch)), msg);
 
   const save = async () => {
-    if (await change({ reason, remaining: Number(remaining), dueAt: dateInputToDue(due) },
-      Number(remaining) === 0 ? '봉사를 끝냈어요.' : '저장했어요.')) onClose();
+    const dueAt = dateInputToDue(due);
+    if (!dueAt || dueAt < startOfDay()) return toast('기한은 오늘이나 그 뒤 날짜로 정해 주세요.');
+    if (await change({ reason, perDay, dueAt }, willRemain === 0 ? '봉사를 끝냈어요.' : '저장했어요.')) onClose();
   };
   const close = async () => {
     if (!confirm(`'${item.reason}' 봉사를 종료할까요? 남은 ${item.remaining}회는 하지 않아도 돼요.`)) return;
@@ -1494,19 +1521,20 @@ function ServiceItemModal({ fid, child, item, onClose }) {
 
   return html`
     <${Modal} title=${`${child.name} · 집안일 봉사`} onClose=${onClose}>
-      <p class="muted">${item.count}회 중 ${item.count - item.remaining}회 완료</p>
+      <p class="muted">총 ${item.count}회 중 ${item.count - item.remaining}회 완료 · 오늘 ${todayDone}/${perDayOf(item)}회</p>
       <label class="field">사유 (아이에게 보여요)
         <input maxlength="40" value=${reason} onInput=${(e) => setReason(e.target.value)} />
       </label>
-      <div class="field">남은 횟수
+      <div class="field">하루 횟수
         <div class="stepper">
-          <button onClick=${() => setRemaining(Math.max(0, Number(remaining) - 1))} aria-label="1회 줄이기">−</button>
-          <b>${remaining}회</b>
-          <button onClick=${() => setRemaining(Math.min(100, Number(remaining) + 1))} aria-label="1회 늘리기">＋</button>
+          <button onClick=${() => setPerDay(Math.max(1, perDay - 1))} aria-label="하루 1회 줄이기">−</button>
+          <b>매일 ${perDay}회</b>
+          <button onClick=${() => setPerDay(Math.min(20, perDay + 1))} aria-label="하루 1회 늘리기">＋</button>
         </div>
       </div>
-      <label class="field">기한
+      <label class="field">기한 (이 날까지 매일)
         <input type="date" value=${due} min=${dueToDateInput(Date.now())} onInput=${(e) => setDue(e.target.value)} />
+        <span class="service-calc">저장하면 남은 횟수: <b>${willRemain}회</b> (오늘부터 ${serviceDays(dateInputToDue(due))}일)</span>
       </label>
       <button class="btn primary block" onClick=${save}>저장</button>
       <button class="btn danger-ghost block" onClick=${close}>봉사 종료 (남은 ${item.remaining}회 면제)</button>
@@ -1547,8 +1575,8 @@ function ChildHome({ fid, me, chores, requests, family }) {
   };
 
   const serving = me.serviceRemaining > 0;
-  // 봉사는 하루 1회: 오늘 아직 안 했을 때만 용돈 집안일 칸에 '봉사' 표시
-  const serveToday = serving && serviceTodayState(me, requests) === 'todo';
+  // 오늘 봉사 몫이 남았을 때만 용돈 집안일 칸에 '봉사' 표시
+  const serveToday = serving && serviceToday(me, requests).state === 'todo';
 
   return html`
     <div class="balance-card">
@@ -1671,7 +1699,7 @@ function DoneModal({ fid, me, chore, requests, onClose }) {
         <div><div class="title">${chore.name}</div><div class="plus">+${won(priceFor(chore, me.id))}</div></div>
       </div>
       ${chore.desc && html`<p class="muted">${chore.desc}</p>`}
-      ${me.serviceRemaining > 0 && serviceTodayState(me, requests) === 'todo' && choreKind(chore) === 'paid' && html`
+      ${me.serviceRemaining > 0 && serviceToday(me, requests).state === 'todo' && choreKind(chore) === 'paid' && html`
         <p class="hint service-hint">🤝 집안일 봉사가 ${me.serviceRemaining}회 남아 있어서 이번 집안일은 봉사로 처리돼요 (무급).</p>`}
       <textarea rows="2" maxlength="100" placeholder="부모님께 한마디 (선택)"
         value=${memo} onInput=${(e) => setMemo(e.target.value)}></textarea>

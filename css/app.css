@@ -329,6 +329,7 @@ button.card:disabled { opacity: .55; cursor: default; }
 .profile-btn.add .profile-face { background: var(--bg); color: var(--muted); font-size: 28px; }
 .profile-name { font-weight: 700; word-break: keep-all; }
 .center-text { text-align: center; }
+.version { text-align: center; color: var(--muted); font-size: 11px; margin: 16px 0 0; opacity: .8; }
 .block-link { display: block; margin: 8px auto 0; }
 
 /* PIN 입력판 */

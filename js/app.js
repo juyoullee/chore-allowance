@@ -9,6 +9,10 @@ import {
 
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
+// 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
+const APP_VERSION = 'v2 (10/24)';
+const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
+
 /* ───────── 공통 도우미 ───────── */
 
 let pushToast = () => {};
@@ -218,6 +222,7 @@ function AccountPicker({ onAdd }) {
           </div>`}
       </div>
       <button class="link" onClick=${() => setEditing(!editing)}>${editing ? '완료' : '이 기기에서 계정 지우기'}</button>
+      <${Version} />
       ${picking && html`<${PinCheck} account=${picking} onCancel=${() => { setPicking(null); setAccounts(store.listAccounts()); }} />`}
     </div>`;
 }
@@ -253,6 +258,7 @@ function UserMenu({ me, onClose }) {
         <button class="btn danger-ghost block" onClick=${logout}>이 기기에서 로그아웃</button>
       </div>
       <p class="hint">여러 사람이 같이 쓰는 기기라면 각자 PIN을 정해 두세요. 다른 사람이 내 계정으로 들어오지 못해요.</p>
+      <${Version} />
     <//>`;
 }
 
@@ -288,6 +294,7 @@ function FirebaseLogin({ onBack }) {
         ${signUp ? '이미 계정이 있어요 → 로그인' : '처음이에요 → 이메일로 가입'}
       </button>
       ${onBack && html`<button class="link block-link" onClick=${onBack}>← 저장된 계정으로 돌아가기</button>`}
+      <${Version} />
     </div>`;
 }
 

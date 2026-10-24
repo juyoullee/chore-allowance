@@ -11,7 +11,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v6 (10/24)';
+const APP_VERSION = 'v7 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -239,8 +239,25 @@ function AccountGate() {
 }
 
 // 머리글 ⋯ 메뉴: 내 PIN, 로그아웃
-function UserMenu({ me, onClose }) {
+// 이름 하나를 고치는 작은 창 (가족 이름, 내 이름)
+function NameModal({ title, hint, value, placeholder, onSave, onClose }) {
+  const [text, setText] = useState(value || '');
+  const save = async () => {
+    const v = text.trim();
+    if (!v) return toast('이름을 입력해 주세요.');
+    if (await run(() => onSave(v), '저장했어요.')) onClose();
+  };
+  return html`
+    <${Modal} title=${title} onClose=${onClose}>
+      ${hint && html`<p class="hint">${hint}</p>`}
+      <input maxlength="20" placeholder=${placeholder} value=${text} onInput=${(e) => setText(e.target.value)} />
+      <div class="stack"><button class="btn primary block" onClick=${save}>저장</button></div>
+    <//>`;
+}
+
+function UserMenu({ fid, me, onClose }) {
   const [changingPin, setChangingPin] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const account = store.currentAccount();
 
   const logout = () => {
@@ -251,10 +268,16 @@ function UserMenu({ me, onClose }) {
     return html`<${PinSetup} title=${account?.hasPin ? 'PIN 바꾸기' : 'PIN 정하기'}
       onCancel=${() => setChangingPin(false)} onDone=${onClose} />`;
   }
+  if (renaming) {
+    return html`<${NameModal} title="내 이름 바꾸기" value=${me.name} placeholder="예: 엄마, 민수"
+      hint="가족 모두에게 보이는 이름이에요. 이미 남은 기록의 이름은 그대로예요."
+      onSave=${(name) => store.updateMember(fid, me.id, { name })} onClose=${onClose} />`;
+  }
   return html`
     <${Modal} title=${`${roleEmoji(me.role)} ${me.name}`} onClose=${onClose}>
       <p class="muted small">${account?.email || ''}</p>
       <div class="stack">
+        <button class="btn block" onClick=${() => setRenaming(true)}>✏️ 내 이름 바꾸기</button>
         <button class="btn block" onClick=${() => setChangingPin(true)}>🔒 ${account?.hasPin ? 'PIN 바꾸기' : 'PIN 정하기'}</button>
         <button class="btn danger-ghost block" onClick=${logout}>이 기기에서 로그아웃</button>
       </div>
@@ -347,7 +370,7 @@ function Onboarding({ user }) {
 
 /* ───────── 화면 틀 ───────── */
 
-function Shell({ family, me, tabs, tab, setTab, children }) {
+function Shell({ fid, family, me, tabs, tab, setTab, children }) {
   const [menu, setMenu] = useState(false);
   const [pinFirst, setPinFirst] = useState(false);
   // 바로 '누가 사용하나요?' 화면으로 간다. PIN이 없으면 먼저 정하게 한다.
@@ -367,7 +390,7 @@ function Shell({ family, me, tabs, tab, setTab, children }) {
               <button class="icon-btn" onClick=${() => setMenu(true)} aria-label="내 계정 메뉴">⋯</button>
             </div>`}
       </header>
-      ${menu && html`<${UserMenu} me=${me} onClose=${() => setMenu(false)} />`}
+      ${menu && html`<${UserMenu} fid=${fid} me=${me} onClose=${() => setMenu(false)} />`}
       ${pinFirst && html`
         <${PinSetup} title="바꾸기 전에 PIN을 정해 주세요" onCancel=${() => setPinFirst(false)} onDone=${() => store.showPicker()} />`}
       <main>${children}</main>
@@ -728,6 +751,7 @@ function FamilyTab({ fid, family, members, requests, chores }) {
   const [penaltyFor, setPenaltyFor] = useState(null);
   const [serviceFor, setServiceFor] = useState(null);
   const [editSettings, setEditSettings] = useState(false);
+  const [renameFamily, setRenameFamily] = useState(false);
 
   const copy = (code) => run(() => navigator.clipboard.writeText(code), '코드를 복사했어요.');
   const regen = (role) => {
@@ -790,8 +814,22 @@ function FamilyTab({ fid, family, members, requests, chores }) {
         <button class="btn small ghost" onClick=${() => regen(role)}>새로 만들기</button>
       </div>`)}
 
-    <h2 class="section">부모</h2>
-    <div class="card">${parents.map((p) => p.name).join(', ')}</div>
+    <h2 class="section">가족 정보</h2>
+    <div class="card list">
+      <div class="row-item">
+        <span class="emoji small">🏠</span>
+        <div class="grow"><div class="muted small">가족 이름 (화면 맨 위에 보여요)</div><div class="title">${family.name}</div></div>
+        <button class="btn small ghost" onClick=${() => setRenameFamily(true)}>수정</button>
+      </div>
+      <div class="row-item">
+        <span class="emoji small">🧑</span>
+        <div class="grow"><div class="muted small">부모</div><div class="title">${parents.map((p) => p.name).join(', ')}</div></div>
+      </div>
+    </div>
+    ${renameFamily && html`
+      <${NameModal} title="가족 이름 바꾸기" value=${family.name} placeholder="예: 우리집, 이씨네"
+        hint="가족 모두의 화면 맨 위에 보이는 이름이에요."
+        onSave=${(name) => store.updateFamily(fid, { name })} onClose=${() => setRenameFamily(false)} />`}
 
     ${store.mode === 'demo' && html`
       <button class="btn danger-ghost block" onClick=${() => confirm('체험 데이터를 모두 지울까요?') && store.resetDemo()}>
@@ -1557,7 +1595,7 @@ function ParentApp(ctx) {
     ['history', '달력', '📅', 0],
   ];
   return html`
-    <${Shell} family=${ctx.family} me=${ctx.me} tabs=${tabs} tab=${tab} setTab=${setTab}>
+    <${Shell} fid=${ctx.fid} family=${ctx.family} me=${ctx.me} tabs=${tabs} tab=${tab} setTab=${setTab}>
       ${tab === 'approve' && html`<${ApproveTab} ...${ctx} />`}
       ${tab === 'chores' && html`<${ChoresTab} ...${ctx} />`}
       ${tab === 'family' && html`<${FamilyTab} ...${ctx} />`}
@@ -1570,7 +1608,7 @@ function ChildApp(ctx) {
   const [tab, setTab] = useState('home');
   const tabs = [['home', '홈', '🏠', 0], ['rules', '규칙', '📜', 0], ['history', '달력', '📅', 0]];
   return html`
-    <${Shell} family=${ctx.family} me=${ctx.me} tabs=${tabs} tab=${tab} setTab=${setTab}>
+    <${Shell} fid=${ctx.fid} family=${ctx.family} me=${ctx.me} tabs=${tabs} tab=${tab} setTab=${setTab}>
       ${tab === 'home' && html`<${ChildHome} ...${ctx} />`}
       ${tab === 'rules' && html`<${RulesTab} ...${ctx} />`}
       ${tab === 'history' && html`<${HistoryTab} ...${ctx} onlyChild=${ctx.me.id} />`}

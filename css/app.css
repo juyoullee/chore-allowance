@@ -121,6 +121,8 @@ textarea { resize: none; margin-bottom: 12px; }
   background: var(--bg);
 }
 .fam { font-weight: 800; font-size: 18px; }
+.top-actions { display: flex; align-items: center; gap: 2px; }
+.top-actions .icon-btn { font-size: 20px; color: var(--text); }
 .who { color: var(--muted); font-size: 13px; }
 main { padding: 4px 16px calc(96px + env(safe-area-inset-bottom)); }
 .tabs {

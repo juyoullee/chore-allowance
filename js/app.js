@@ -232,31 +232,24 @@ function AccountGate() {
   return html`<${AccountPicker} onAdd=${() => setAdding(true)} />`;
 }
 
-// 머리글의 '바꾸기' 메뉴
+// 머리글 ⋯ 메뉴: 내 PIN, 로그아웃
 function UserMenu({ me, onClose }) {
-  const [pinFor, setPinFor] = useState(null); // 'switch' | 'change'
+  const [changingPin, setChangingPin] = useState(false);
   const account = store.currentAccount();
-  const others = store.listAccounts().length - 1;
 
-  const switchUser = () => (account?.hasPin ? store.showPicker() : setPinFor('switch'));
   const logout = () => {
     if (confirm('이 기기에서 로그아웃할까요? 다시 쓰려면 이메일과 비밀번호(또는 Google)로 로그인해야 해요.')) store.signOut();
   };
 
-  if (pinFor) {
-    return html`<${PinSetup}
-      title=${pinFor === 'switch' ? '바꾸기 전에 PIN을 정해 주세요' : 'PIN 바꾸기'}
-      onCancel=${() => setPinFor(null)}
-      onDone=${() => (pinFor === 'switch' ? store.showPicker() : onClose())} />`;
+  if (changingPin) {
+    return html`<${PinSetup} title=${account?.hasPin ? 'PIN 바꾸기' : 'PIN 정하기'}
+      onCancel=${() => setChangingPin(false)} onDone=${onClose} />`;
   }
   return html`
     <${Modal} title=${`${roleEmoji(me.role)} ${me.name}`} onClose=${onClose}>
       <p class="muted small">${account?.email || ''}</p>
       <div class="stack">
-        <button class="btn primary block" onClick=${switchUser}>
-          👥 사용자 바꾸기${others > 0 ? ` (저장된 계정 ${others}개 더)` : ''}
-        </button>
-        <button class="btn block" onClick=${() => setPinFor('change')}>🔒 ${account?.hasPin ? 'PIN 바꾸기' : 'PIN 정하기'}</button>
+        <button class="btn block" onClick=${() => setChangingPin(true)}>🔒 ${account?.hasPin ? 'PIN 바꾸기' : 'PIN 정하기'}</button>
         <button class="btn danger-ghost block" onClick=${logout}>이 기기에서 로그아웃</button>
       </div>
       <p class="hint">여러 사람이 같이 쓰는 기기라면 각자 PIN을 정해 두세요. 다른 사람이 내 계정으로 들어오지 못해요.</p>
@@ -348,6 +341,9 @@ function Onboarding({ user }) {
 
 function Shell({ family, me, tabs, tab, setTab, children }) {
   const [menu, setMenu] = useState(false);
+  const [pinFirst, setPinFirst] = useState(false);
+  // 바로 '누가 사용하나요?' 화면으로 간다. PIN이 없으면 먼저 정하게 한다.
+  const switchUser = () => (store.currentAccount()?.hasPin ? store.showPicker() : setPinFirst(true));
   return html`
     <div class="shell">
       <header class="top">
@@ -357,9 +353,15 @@ function Shell({ family, me, tabs, tab, setTab, children }) {
         </div>
         ${store.mode === 'demo'
           ? html`<button class="btn small ghost" onClick=${() => store.signOut()}>나가기</button>`
-          : html`<button class="btn small ghost" onClick=${() => setMenu(true)}>👥 바꾸기</button>`}
+          : html`
+            <div class="top-actions">
+              <button class="btn small ghost" onClick=${switchUser}>👥 바꾸기</button>
+              <button class="icon-btn" onClick=${() => setMenu(true)} aria-label="내 계정 메뉴">⋯</button>
+            </div>`}
       </header>
       ${menu && html`<${UserMenu} me=${me} onClose=${() => setMenu(false)} />`}
+      ${pinFirst && html`
+        <${PinSetup} title="바꾸기 전에 PIN을 정해 주세요" onCancel=${() => setPinFirst(false)} onDone=${() => store.showPicker()} />`}
       <main>${children}</main>
       <nav class="tabs">
         ${tabs.map(([key, label, icon, badge]) => html`

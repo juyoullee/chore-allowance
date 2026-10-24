@@ -11,7 +11,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v13 (10/24)';
+const APP_VERSION = 'v14 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -535,7 +535,7 @@ function RejectModal({ fid, req, onClose }) {
 
 const daysLabel = (days) => (days.length === 7 ? '매일' : [...days].sort().map((d) => WEEKDAYS[d]).join('·'));
 
-function ChoresTab({ fid, chores, members }) {
+function ChoresTab({ fid, chores, members, family, requests }) {
   const [editing, setEditing] = useState(null);
   const [who, setWho] = useState('all'); // 'all' 또는 자녀 id: 그 자녀에게 보이는 항목만
   const children = members.filter((m) => m.role === 'child');
@@ -543,12 +543,11 @@ function ChoresTab({ fid, chores, members }) {
   const shown = who === 'all' ? chores : chores.filter((c) => targetsChild(c, who));
   const groups = Object.keys(KINDS).map((kind) => ({ kind, items: shown.filter((c) => choreKind(c) === kind) }));
   const hasPrices = (c) => Object.keys(c.prices || {}).length > 0;
-  // 진행 중인 집안일 봉사(위반 건별 카드)도 특별 미션 칸에 함께 보여 준다.
-  const [svc, setSvc] = useState(null); // { childId, itemId }
-  const serviceItems = children.filter((c) => who === 'all' || c.id === who)
-    .flatMap((c) => servicesOf(c).map((item) => ({ child: c, item })));
-  const svcChild = svc && children.find((c) => c.id === svc.childId);
-  const svcItem = svcChild && servicesOf(svcChild).find((s) => s.id === svc.itemId);
+  // 진행 중인 집안일 봉사도 특별 미션 칸에 아이마다 카드 1장으로 보여 준다. 누르면 건별로 고치는 창.
+  const [svcChildId, setSvcChildId] = useState(null);
+  const serving = children.filter((c) => (who === 'all' || c.id === who) && servicesOf(c).length > 0);
+  const caseCount = serving.reduce((n, c) => n + servicesOf(c).length, 0);
+  const svcChild = svcChildId && children.find((c) => c.id === svcChildId);
 
   // 같은 종류 안에서 순서를 바꾸고, 전체 순서를 다시 저장한다.
   const move = (gi, i, dir) => {
@@ -577,12 +576,12 @@ function ChoresTab({ fid, chores, members }) {
         : `${nameOf(who)} 화면에 보이는 항목과 금액이에요. 여기서 추가하면 ${nameOf(who)} 전용 항목이 돼요.`}
     </p>
     ${groups.map(({ kind, items }, gi) => html`
-      <h3 class="day">${KINDS[kind].label} ${items.length}개${kind === 'mission' && serviceItems.length
-        ? ` · 생활 약속 위반 ${serviceItems.length}건` : ''}</h3>
-      ${kind === 'mission' && serviceItems.map(({ child, item }) => html`
-        <${ServiceItemCard} key=${item.id} item=${item} who=${child.name}
-          onOpen=${() => setSvc({ childId: child.id, itemId: item.id })} />`)}
-      ${!items.length && !(kind === 'mission' && serviceItems.length) && html`<p class="hint">${KINDS[kind].desc}</p>`}
+      <h3 class="day">${KINDS[kind].label} ${items.length}개${kind === 'mission' && caseCount
+        ? ` · 생활 약속 위반 총 ${caseCount}건` : ''}</h3>
+      ${kind === 'mission' && serving.map((c) => html`
+        <${ServiceSummaryCard} key=${c.id} member=${c} requests=${requests} who=${c.name}
+          onOpen=${() => setSvcChildId(c.id)} />`)}
+      ${!items.length && !(kind === 'mission' && serving.length) && html`<p class="hint">${KINDS[kind].desc}</p>`}
       ${items.map((c, i) => html`
         <div class=${`card chore-row ${c.hidden || c.done ? 'dim' : ''}`} key=${c.id}>
           <button class="row-item grow plain" onClick=${() => setEditing(c)} aria-label=${`${c.name} 수정`}>
@@ -613,7 +612,8 @@ function ChoresTab({ fid, chores, members }) {
     ${editing && html`
       <${ChoreEditor} fid=${fid} chore=${editing} children=${children} count=${chores.length}
         onClose=${() => setEditing(null)} />`}
-    ${svcItem && html`<${ServiceItemModal} fid=${fid} child=${svcChild} item=${svcItem} onClose=${() => setSvc(null)} />`}`;
+    ${svcChild && html`
+      <${ServiceModal} fid=${fid} child=${svcChild} settings=${settingsOf(family)} onClose=${() => setSvcChildId(null)} />`}`;
 }
 
 // 집안일 아이콘: 종류별로 묶어 보여 준다. 목록에 없으면 직접 입력할 수 있다.
@@ -1506,23 +1506,47 @@ function ServiceItemCard({ item, who, onOpen }) {
     : html`<div class=${cls}>${body}</div>`;
 }
 
-// 자녀 화면 특별 미션 칸: 위반 건수·남은 봉사 요약 + 건별 카드
-function ServiceCard({ me, requests }) {
-  const items = servicesOf(me);
-  const t = serviceToday(me, requests);
+// 한 아이의 집안일 봉사를 카드 1장으로: "생활 약속 위반 총 N건 · 오늘 봉사 x/y"
+// 자녀 화면에서는 안내 문구까지, 부모 화면에서는 누르면 건별로 고치는 창이 열린다.
+function ServiceSummaryCard({ member, requests, who, onOpen, showGuide = false }) {
+  const items = servicesOf(member);
+  const t = serviceToday(member, requests);
   const left = Math.max(0, t.quota - t.done - t.pending);
-  const todayText = {
+  const overdue = member.serviceDueAt && Date.now() > member.serviceDueAt;
+  // 건마다 붙은 "· 1건째"를 떼고, 생활 약속 위반 외의 사유가 있으면 함께 보여 준다
+  const others = [...new Set(items.map((s) => s.reason.replace(/ · \d+건째$/, '')))].filter((r) => r !== '생활 약속 위반');
+  const guide = {
     none: '오늘은 해야 할 봉사가 없어요.',
-    done: `✅ 오늘 봉사 ${t.quota}회 완료! 내일 또 해요.`,
-    pending: `⏳ 오늘 ${t.quota}회 중 ${t.done}회 완료, 나머지는 부모님 확인 기다리는 중`,
-    todo: `👉 오늘 ${t.quota}회 중 ${t.done}회 했어요. 용돈 집안일 ${left}개를 더 하면 오늘 몫을 채워요.`,
+    done: '✅ 오늘 몫 완료! 내일 또 해요.',
+    pending: '⏳ 나머지는 부모님 확인 기다리는 중',
+    todo: `👉 용돈 집안일 ${left}개를 더 하면 오늘 몫을 채워요.`,
   }[t.state];
-  return html`
-    <div class="service-summary">
-      <div><b>생활 약속 위반 ${items.length}건</b> · 오늘 봉사 <b>${t.done}/${t.quota}회</b></div>
-      <div class="small">${todayText}</div>
+  const body = html`
+    <span class="emoji">🤝</span>
+    <div class="grow">
+      <div class="title">${who ? `${who} · ` : ''}생활 약속 위반 총 ${items.length}건</div>
+      ${others.length > 0 && html`<div class="muted small">${others.join(', ')} 포함</div>`}
+      <div class="service-today">
+        <span class="small">오늘 봉사 <b>${t.done}/${t.quota}</b></span>
+        <span class="service-dots">${Array.from({ length: Math.min(t.quota, 20) }, (_, i) => html`<span class=${i < t.done ? 'on' : ''}></span>`)}</span>
+      </div>
+      ${showGuide && html`<div class="small service-text">${guide}</div>`}
     </div>
-    ${items.map((item) => html`<${ServiceItemCard} key=${item.id} item=${item} />`)}`;
+    <div class="mission-side">
+      ${member.serviceDueAt && html`
+        <span class=${`tag ${overdue ? 'warn' : 'due'}`}>${overdue ? '기한 지남' : `기한 ${dueLabel(member.serviceDueAt)}`}</span>`}
+      ${onOpen && items.some((s) => s.perDay == null) && html`<span class="tag warn">⚠ 하루 횟수 확인</span>`}
+      ${onOpen && html`<span class="muted small">수정 ›</span>`}
+    </div>`;
+  const cls = `card service-card ${overdue ? 'overdue-card' : ''}`;
+  return onOpen
+    ? html`<button class=${cls} onClick=${onOpen}>${body}</button>`
+    : html`<div class=${cls}>${body}</div>`;
+}
+
+// 자녀 화면 특별 미션 칸
+function ServiceCard({ me, requests }) {
+  return html`<${ServiceSummaryCard} member=${me} requests=${requests} showGuide=${true} />`;
 }
 
 // 부모: 봉사 카드 하나를 고치거나 종료

@@ -168,6 +168,30 @@ export function checkPayout(member, requests, amount) {
   return null;
 }
 
+/* ───────── 집안일 봉사 (위반 1건 = 봉사 항목 1개) ───────── */
+
+// 자녀의 봉사 항목 목록. 예전 버전(합계 숫자만 저장)은 항목 하나로 보여 준다.
+export function servicesOf(member) {
+  if (Array.isArray(member.services)) return member.services;
+  const n = member.serviceRemaining || 0;
+  return n > 0 ? [{ id: 'legacy', reason: '생활 약속 위반', count: n, remaining: n, dueAt: member.serviceDueAt ?? null, createdAt: 0 }] : [];
+}
+
+// 항목 목록으로 자녀 계정에 저장할 값을 만든다. 합계(serviceRemaining)와 가장 이른 기한도 함께 맞춘다.
+function servicePatch(items) {
+  const active = items.filter((s) => s.remaining > 0);
+  const dues = active.map((s) => s.dueAt).filter(Boolean);
+  return {
+    services: active,
+    serviceRemaining: active.reduce((sum, s) => sum + s.remaining, 0),
+    serviceDueAt: dues.length ? Math.min(...dues) : null,
+  };
+}
+
+// 봉사를 채울 때는 기한이 이른 것, 먼저 생긴 것부터
+const nextServiceItem = (items) => [...items].filter((s) => s.remaining > 0)
+  .sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity) || a.createdAt - b.createdAt)[0];
+
 // 승인했을 때 자녀 계정이 어떻게 바뀌는지 계산한다. serviceUsed 외의 값은 자녀 계정에 그대로 저장한다.
 // - 집안일 봉사가 남아 있으면 그날 첫 용돈 집안일은 무급으로 처리하고 봉사를 1 줄인다 (하루 1회, 특별 미션 제외).
 //   같은 날 두 번째 집안일부터는 평소처럼 용돈이 쌓인다. 날짜는 집안일을 한(요청한) 날 기준.
@@ -178,11 +202,10 @@ export function approvalEffect(req, member) {
   const service = member.serviceRemaining || 0;
   const day = startOfDay(req.createdAt);
   if (req.type === 'chore' && req.choreKind !== 'mission' && service > 0 && member.serviceLastDay !== day) {
-    const left = service - 1;
-    return {
-      balance, serviceRemaining: left, serviceLastDay: day, serviceUsed: true,
-      ...(left === 0 ? { serviceDueAt: null } : {}),
-    };
+    const items = servicesOf(member);
+    const target = nextServiceItem(items);
+    const next = items.map((s) => (s.id === target.id ? { ...s, remaining: s.remaining - 1 } : s));
+    return { balance, serviceLastDay: day, serviceUsed: true, ...servicePatch(next) };
   }
   const after = balance + (req.type === 'payout' ? -req.amount : req.amount);
   if (after < 0) throw new Error('잔액이 부족해서 승인할 수 없어요.');
@@ -297,15 +320,60 @@ export function ruleEffect(rule) {
   return `${RULE_TYPES.warning.icon} 경고`;
 }
 
-// count가 음수면 집안일 봉사를 줄인다 (해제). dueAt은 남은 봉사를 모두 끝낼 기한 (그날 23:59).
-export function serviceRecord(member, count, reason, dueAt = null) {
+// 집안일 봉사 부여. count가 음수면 남은 봉사를 모두 없앤다 (해제).
+// pieces > 1이면 위반 건마다 항목을 따로 만든다 (예: 2건 × 2회 → "1건째", "2건째" 항목 2개).
+// dueAt은 그 봉사를 끝낼 기한 (그날 23:59).
+export function serviceRecord(member, count, reason, dueAt = null, pieces = 1) {
   if (!Number.isInteger(count) || count === 0) throw new Error('봉사 횟수를 입력해 주세요.');
-  const remaining = Math.max(0, (member.serviceRemaining || 0) + count);
-  const due = remaining > 0 ? (dueAt ?? member.serviceDueAt ?? null) : null;
+  const items = servicesOf(member);
+  let next;
+  if (count < 0) {
+    next = [];
+  } else {
+    const each = Math.floor(count / pieces);
+    const now = Date.now();
+    const added = Array.from({ length: pieces }, (_, i) => ({
+      id: `s-${now.toString(36)}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+      reason: pieces > 1 ? `${reason} · ${i + 1}건째` : reason,
+      count: i === pieces - 1 ? count - each * (pieces - 1) : each,
+      dueAt,
+      createdAt: now + i,
+    })).map((s) => ({ ...s, remaining: s.count }));
+    next = [...items, ...added];
+  }
+  const patch = servicePatch(next);
   return {
-    patch: { serviceRemaining: remaining, serviceDueAt: due },
-    record: { type: 'service', amount: 0, count, reason, serviceAfter: remaining, dueAt: due },
+    patch,
+    record: {
+      type: 'service', amount: 0, count: count < 0 ? -(member.serviceRemaining || 0) : count,
+      reason: pieces > 1 ? `${reason} (${pieces}건)` : reason, serviceAfter: patch.serviceRemaining, dueAt,
+    },
   };
+}
+
+// 봉사 항목 하나를 고치거나(남은 횟수·사유·기한) 종료한다.
+export function serviceItemChange(member, itemId, { reason, remaining, dueAt, close = false }) {
+  const items = servicesOf(member);
+  const item = items.find((s) => s.id === itemId);
+  if (!item) throw new Error('이미 끝난 봉사예요.');
+  let next;
+  let delta;
+  let note;
+  if (close) {
+    next = items.filter((s) => s.id !== itemId);
+    delta = -item.remaining;
+    note = `${item.reason} 종료`;
+  } else {
+    if (!Number.isInteger(remaining) || remaining < 0 || remaining > 100) throw new Error('남은 횟수는 0~100 사이로 입력해 주세요.');
+    const name = (reason || '').trim() || item.reason;
+    next = items.map((s) => (s.id === itemId
+      ? { ...s, reason: name, remaining, count: Math.max(s.count, remaining), dueAt: dueAt ?? s.dueAt }
+      : s));
+    delta = remaining - item.remaining;
+    note = remaining === 0 ? `${name} 종료` : `${name} 수정`;
+  }
+  const patch = servicePatch(next);
+  return { patch, record: { type: 'service', amount: 0, count: delta, reason: note, serviceAfter: patch.serviceRemaining } };
 }
 
 // 하루 1회씩 하면 남은 봉사를 끝내는 데 걸리는 날 + 하루 여유를 기본 기한으로 한다.

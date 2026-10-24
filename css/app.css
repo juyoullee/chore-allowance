@@ -236,6 +236,15 @@ main { padding: 4px 16px calc(96px + env(safe-area-inset-bottom)); }
 /* 집안일 봉사 */
 .service-card { display: flex; align-items: center; gap: 12px; border: 1.5px solid #c4b5fd; background: rgba(237, 233, 254, .5); }
 .overdue { color: var(--minus); font-weight: 700; }
+.service-summary {
+  background: #ede9fe; color: #4c1d95; border-radius: var(--radius); padding: 10px 14px; margin-bottom: 10px; font-size: 14px;
+}
+.service-summary .small { margin-top: 2px; }
+.service-dots { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.service-dots span { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #a78bfa; }
+.service-dots span.on { background: #7c3aed; border-color: #7c3aed; }
+.stepper { display: flex; align-items: center; gap: 16px; margin-top: 6px; color: var(--text); font-size: 18px; }
+.stepper button { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); font-size: 22px; }
 .service-card.overdue-card { border-color: var(--minus); background: rgba(254, 226, 226, .45); }
 .tag.service { background: #ede9fe; color: #6d28d9; border-color: transparent; font-weight: 700; }
 .balance-note { font-size: 12px; text-align: center; margin-top: 8px; opacity: .92; }

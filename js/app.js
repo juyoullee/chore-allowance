@@ -5,12 +5,13 @@ import {
   todayCount, pendingPayoutSum, checkPayout, choreVisibleTo, errorMessage,
   KINDS, choreKind, missionRequest, isOverdue, dueLabel, dateInputToDue, dueToDateInput, goalProgress,
   settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, serviceRecord, priceFor, targetsChild,
+  RULE_TYPES, rulesOf, rulesNoteOf, ruleEffect,
 } from './logic.js';
 
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v5 (10/24)';
+const APP_VERSION = 'v6 (10/24)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -832,8 +833,8 @@ function PenaltyModal({ fid, child, onClose }) {
     <//>`;
 }
 
-function ServiceModal({ fid, child, settings, onClose }) {
-  const [mode, setMode] = useState('normal');
+function ServiceModal({ fid, child, settings, onClose, initialMode = 'normal' }) {
+  const [mode, setMode] = useState(initialMode);
   const [reason, setReason] = useState('');
   const [count, setCount] = useState('1');
   const [cases, setCases] = useState('1');
@@ -911,6 +912,209 @@ function SettingsModal({ fid, settings, onClose }) {
       </label>
       <p class="hint">그날의 '오늘의 기본 할 일'을 모두 체크하면 연속 일수가 1 늘어요. 하나라도 빠진 날이 있으면 0부터 다시 시작해요. 기본 할 일이 없는 요일은 세지 않고 넘어가요.</p>
       <button class="btn primary block" onClick=${save}>저장</button>
+    <//>`;
+}
+
+/* ───────── 생활 규칙 (부모 · 자녀 공용) ───────── */
+
+function RulesTab({ fid, family, members, requests, me }) {
+  const isParent = me.role === 'parent';
+  const rules = rulesOf(family);
+  const settings = settingsOf(family);
+  const children = members.filter((m) => m.role === 'child');
+  const [applying, setApplying] = useState(null); // 규칙 또는 'major'
+  const [editing, setEditing] = useState(null);   // 규칙 또는 {} (새 규칙)
+  const [editNote, setEditNote] = useState(false);
+  const [majorFor, setMajorFor] = useState(null); // 중대 사안을 적용할 자녀
+  const records = requests
+    .filter((r) => r.type === 'penalty' || (r.type === 'service' && r.count > 0))
+    .filter((r) => isParent || r.childId === me.id)
+    .slice(0, 10);
+
+  return html`
+    <div class="section-head">
+      <h2 class="section">📜 우리 집 생활 약속</h2>
+      ${isParent && html`<button class="btn small ghost" onClick=${() => setEditNote(true)}>안내 수정</button>`}
+    </div>
+    <div class="card rules-note">${rulesNoteOf(family)}</div>
+
+    <div class="section-head">
+      <h2 class="section">약속을 어기면</h2>
+      ${isParent && html`<button class="btn primary small" onClick=${() => setEditing({})}>+ 규칙 추가</button>`}
+    </div>
+    ${!rules.length && html`<p class="hint">아직 규칙이 없어요.</p>`}
+    ${rules.map((rule) => html`
+      <div class="card rule" key=${rule.id}>
+        <div class="row-item">
+          <span class="emoji">${rule.emoji || '📌'}</span>
+          <div class="grow">
+            <div class="title">${rule.title}</div>
+            ${rule.desc && html`<div class="muted small">${rule.desc}</div>`}
+          </div>
+        </div>
+        <div class="rule-foot">
+          <span class=${`tag rule-${rule.type}`}>${ruleEffect(rule)}</span>
+          ${isParent && html`
+            <div class="rule-actions">
+              <button class="btn small ghost" onClick=${() => setEditing(rule)}>수정</button>
+              ${rule.type !== 'warning' && children.length > 0 && html`
+                <button class="btn small" onClick=${() => setApplying(rule)}>적용</button>`}
+            </div>`}
+        </div>
+      </div>`)}
+    <div class="card rule">
+      <div class="row-item">
+        <span class="emoji">🏫</span>
+        <div class="grow">
+          <div class="title">중대 사안</div>
+          <div class="muted small">학교 등에서 사실과 조치가 확정된 일. 1건마다 집안일 봉사를 해요.</div>
+        </div>
+      </div>
+      <div class="rule-foot">
+        <span class="tag rule-service">🤝 1건당 집안일 봉사 ${settings.violencePerCase}회</span>
+        ${isParent && children.length > 0 && html`
+          <div class="rule-actions"><button class="btn small" onClick=${() => setApplying('major')}>적용</button></div>`}
+      </div>
+    </div>
+
+    <h2 class="section">약속을 지키면</h2>
+    <div class="card list">
+      <div class="row-item"><span class="emoji small">🔥</span>
+        <div class="grow">오늘의 기본 할 일을 ${settings.streakDays}일 연속 모두 하면</div>
+        <b class="plus">+${won(settings.streakBonus)}</b></div>
+      <div class="row-item"><span class="emoji small">💰</span>
+        <div class="grow">용돈 집안일을 하고 부모님이 승인하면</div><b class="plus">항목별 금액</b></div>
+      <div class="row-item"><span class="emoji small">🎯</span>
+        <div class="grow">모은 용돈으로 저축 목표에 가까워져요</div></div>
+    </div>
+
+    ${records.length > 0 && html`
+      <h2 class="section">${isParent ? '최근 적용 기록' : '내 기록'}</h2>
+      <div class="card list">
+        ${records.map((r) => html`
+          <div class="row-item" key=${r.id}>
+            <span class="emoji small">${reqIcon(r)}</span>
+            <div class="grow">
+              <div class="title">${r.reason || reqTitle(r)}</div>
+              <div class="muted small">${isParent ? `${r.childName} · ` : ''}${fmtDate(r.createdAt)}</div>
+            </div>
+            <${Amount} r=${r} />
+          </div>`)}
+      </div>`}
+
+    ${applying && html`
+      <${RuleApplyModal} fid=${fid} rule=${applying} members=${members} onClose=${() => setApplying(null)}
+        onMajor=${(child) => { setApplying(null); setMajorFor(child); }} />`}
+    ${majorFor && html`
+      <${ServiceModal} fid=${fid} child=${members.find((m) => m.id === majorFor.id)} settings=${settings}
+        initialMode="violence" onClose=${() => setMajorFor(null)} />`}
+    ${editing && html`<${RuleEditModal} fid=${fid} family=${family} rule=${editing} onClose=${() => setEditing(null)} />`}
+    ${editNote && html`<${RulesNoteModal} fid=${fid} family=${family} onClose=${() => setEditNote(false)} />`}`;
+}
+
+// 규칙을 자녀에게 적용 (차감 또는 집안일 봉사)
+function RuleApplyModal({ fid, rule, members, onClose, onMajor }) {
+  const children = members.filter((m) => m.role === 'child');
+  const [childId, setChildId] = useState(children.length === 1 ? children[0].id : null);
+  const child = children.find((c) => c.id === childId);
+  const major = rule === 'major';
+  const short = !major && rule.type === 'money' && child && rule.amount > (child.balance || 0);
+
+  const apply = async () => {
+    if (!child) return toast('누구에게 적용할지 골라 주세요.');
+    if (major) return onMajor(child);
+    const make = rule.type === 'money'
+      ? (m) => penaltyRecord(m, rule.amount, rule.title)
+      : (m) => serviceRecord(m, rule.count, rule.title);
+    if (await run(() => store.addRecord(fid, child.id, make), `${child.name}에게 적용했어요.`)) onClose();
+  };
+
+  return html`
+    <${Modal} title=${major ? '중대 사안 적용' : `${rule.emoji || '📌'} ${rule.title}`} onClose=${onClose}>
+      <p class="muted">${major ? '누구에게 적용할까요? 다음 화면에서 건수를 입력해요.' : `${ruleEffect(rule)} · 누구에게 적용할까요?`}</p>
+      <div class="chips">
+        ${children.map((c) => html`
+          <button class=${`chip ${childId === c.id ? 'on' : ''}`} onClick=${() => setChildId(c.id)}>${c.name}</button>`)}
+      </div>
+      ${child && !major && rule.type === 'money' && html`
+        <p class="hint">잔액 ${won(child.balance)} → <b>${won(Math.max(0, (child.balance || 0) - rule.amount))}</b></p>`}
+      ${child && !major && rule.type === 'service' && html`
+        <p class="hint service-hint">남은 집안일 봉사 ${child.serviceRemaining || 0}회 → <b>${(child.serviceRemaining || 0) + rule.count}회</b></p>`}
+      ${short && html`<p class="error">잔액이 ${won(child.balance)}이라 ${won(rule.amount)}을 뺄 수 없어요. 가족 탭의 차감에서 금액을 직접 정할 수 있어요.</p>`}
+      <button class="btn danger block" disabled=${!child || short} onClick=${apply}>${major ? '다음' : '적용하기'}</button>
+    <//>`;
+}
+
+function RuleEditModal({ fid, family, rule, onClose }) {
+  const isNew = !rule.id;
+  const [f, setF] = useState({ emoji: '📌', title: '', desc: '', type: 'money', amount: 500, count: 1, ...rule });
+  const set = (k, v) => setF((prev) => ({ ...prev, [k]: v }));
+
+  const saveRules = (next, msg) => run(() => store.updateFamily(fid, { rules: next }), msg);
+  const save = async () => {
+    const amount = Number(f.amount);
+    const count = Number(f.count);
+    if (!f.title.trim()) return toast('규칙 이름을 입력해 주세요.');
+    if (f.type === 'money' && (!Number.isInteger(amount) || amount < 10 || amount > 1000000)) return toast('금액은 10원 이상 정수로 입력해 주세요.');
+    if (f.type === 'service' && (!Number.isInteger(count) || count < 1 || count > 50)) return toast('집안일 봉사는 1~50회로 정해 주세요.');
+    const item = {
+      id: rule.id || `r-${Math.random().toString(36).slice(2, 9)}`,
+      emoji: f.emoji || '📌',
+      title: f.title.trim(),
+      desc: f.desc.trim(),
+      type: f.type,
+      ...(f.type === 'money' ? { amount } : {}),
+      ...(f.type === 'service' ? { count } : {}),
+    };
+    const list = rulesOf(family);
+    const next = isNew ? [...list, item] : list.map((r) => (r.id === rule.id ? item : r));
+    if (await saveRules(next, isNew ? '규칙을 추가했어요.' : '저장했어요.')) onClose();
+  };
+  const remove = async () => {
+    if (!confirm(`'${rule.title}' 규칙을 지울까요? 이미 적용한 기록은 그대로 남아요.`)) return;
+    if (await saveRules(rulesOf(family).filter((r) => r.id !== rule.id), '규칙을 지웠어요.')) onClose();
+  };
+
+  return html`
+    <${Modal} title=${isNew ? '규칙 추가' : '규칙 수정'} onClose=${onClose}>
+      <div class="field">아이콘<${EmojiPicker} value=${f.emoji} onPick=${(e) => set('emoji', e)} /></div>
+      <label class="field">규칙 이름
+        <input maxlength="30" placeholder="예: 밤 10시 이후 스마트폰 사용" value=${f.title} onInput=${(e) => set('title', e.target.value)} />
+      </label>
+      <label class="field">설명 (선택)
+        <input maxlength="60" placeholder="예: 10시가 되면 휴대폰은 거실에 둬요." value=${f.desc} onInput=${(e) => set('desc', e.target.value)} />
+      </label>
+      <div class="field">어기면
+        <div class="seg small">
+          ${Object.entries(RULE_TYPES).map(([k, v]) => html`
+            <button class=${f.type === k ? 'on' : ''} onClick=${() => set('type', k)}>${v.icon} ${v.label}</button>`)}
+        </div>
+      </div>
+      ${f.type === 'money' && html`
+        <label class="field">차감 금액 (원)
+          <input type="number" inputmode="numeric" min="10" step="100" value=${f.amount} onInput=${(e) => set('amount', e.target.value)} />
+        </label>`}
+      ${f.type === 'service' && html`
+        <label class="field">집안일 봉사 횟수
+          <input type="number" inputmode="numeric" min="1" step="1" value=${f.count} onInput=${(e) => set('count', e.target.value)} />
+        </label>`}
+      ${f.type === 'warning' && html`<p class="hint">경고는 안내만 하고, 용돈이나 봉사에는 영향을 주지 않아요.</p>`}
+      <button class="btn primary block" onClick=${save}>저장</button>
+      ${!isNew && html`<button class="btn danger-ghost block" onClick=${remove}>규칙 지우기</button>`}
+    <//>`;
+}
+
+function RulesNoteModal({ fid, family, onClose }) {
+  const [text, setText] = useState(rulesNoteOf(family));
+  const save = async (value) => {
+    if (await run(() => store.updateFamily(fid, { rulesNote: value }), '안내를 저장했어요.')) onClose();
+  };
+  return html`
+    <${Modal} title="생활 약속 안내" onClose=${onClose}>
+      <p class="hint">규칙 탭 맨 위에 아이들에게 보이는 글이에요.</p>
+      <textarea rows="5" maxlength="300" value=${text} onInput=${(e) => setText(e.target.value)}></textarea>
+      <button class="btn primary block" onClick=${() => save(text.trim())}>저장</button>
+      <button class="btn danger-ghost block" onClick=${() => save(null)}>기본 안내로 되돌리기</button>
     <//>`;
 }
 
@@ -1349,6 +1553,7 @@ function ParentApp(ctx) {
     ['approve', '승인', '📥', pendingCount],
     ['chores', '집안일', '🧽', 0],
     ['family', '가족', '👪', 0],
+    ['rules', '규칙', '📜', 0],
     ['history', '달력', '📅', 0],
   ];
   return html`
@@ -1356,16 +1561,18 @@ function ParentApp(ctx) {
       ${tab === 'approve' && html`<${ApproveTab} ...${ctx} />`}
       ${tab === 'chores' && html`<${ChoresTab} ...${ctx} />`}
       ${tab === 'family' && html`<${FamilyTab} ...${ctx} />`}
+      ${tab === 'rules' && html`<${RulesTab} ...${ctx} />`}
       ${tab === 'history' && html`<${HistoryTab} ...${ctx} />`}
     <//>`;
 }
 
 function ChildApp(ctx) {
   const [tab, setTab] = useState('home');
-  const tabs = [['home', '홈', '🏠', 0], ['history', '달력', '📅', 0]];
+  const tabs = [['home', '홈', '🏠', 0], ['rules', '규칙', '📜', 0], ['history', '달력', '📅', 0]];
   return html`
     <${Shell} family=${ctx.family} me=${ctx.me} tabs=${tabs} tab=${tab} setTab=${setTab}>
       ${tab === 'home' && html`<${ChildHome} ...${ctx} />`}
+      ${tab === 'rules' && html`<${RulesTab} ...${ctx} />`}
       ${tab === 'history' && html`<${HistoryTab} ...${ctx} onlyChild=${ctx.me.id} />`}
     <//>`;
 }

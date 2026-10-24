@@ -260,6 +260,37 @@ export function penaltyRecord(member, amount, reason) {
   };
 }
 
+/* ───────── 생활 규칙표 ───────── */
+
+// 규칙을 어겼을 때: money(용돈 차감) / service(집안일 봉사) / warning(경고만)
+export const RULE_TYPES = {
+  money: { label: '용돈 차감', icon: '🚫' },
+  service: { label: '집안일 봉사', icon: '🤝' },
+  warning: { label: '경고', icon: '⚠️' },
+};
+
+// 부모가 처음 고쳐 쓰기 전까지 보여 주는 기본 규칙 (저장은 부모가 편집할 때)
+export const DEFAULT_RULES = [
+  { id: 'r-phone', emoji: '📵', title: '밤 10시 이후 스마트폰 사용', desc: '10시가 되면 휴대폰은 거실 충전기에 둬요.', type: 'money', amount: 500 },
+  { id: 'r-game', emoji: '🎮', title: '게임 시간 넘기기', desc: '평일 1시간, 주말 2시간까지예요.', type: 'money', amount: 500 },
+  { id: 'r-home', emoji: '⏰', title: '귀가 시간 어기기', desc: '늦으면 미리 연락해요.', type: 'money', amount: 1000 },
+  { id: 'r-lie', emoji: '🤥', title: '거짓말', desc: '실수는 괜찮아요. 솔직하게 말해요.', type: 'service', count: 1 },
+  { id: 'r-fight', emoji: '🤜', title: '형제와 몸싸움', desc: '말로 해결하고, 어려우면 부모님께 말해요.', type: 'service', count: 2 },
+  { id: 'r-late', emoji: '🐢', title: '맡은 일 미루기', desc: '기본 할 일은 그날 안에 해요.', type: 'warning' },
+];
+
+export const DEFAULT_RULES_NOTE = '약속을 지키면 용돈과 보너스가 쌓이고, 어기면 아래처럼 차감이나 집안일 봉사가 있어요. '
+  + '잘못했을 때는 먼저 부모님과 이야기해요.';
+
+export const rulesOf = (family) => family?.rules ?? DEFAULT_RULES;
+export const rulesNoteOf = (family) => family?.rulesNote ?? DEFAULT_RULES_NOTE;
+
+export function ruleEffect(rule) {
+  if (rule.type === 'money') return `${RULE_TYPES.money.icon} ${won(rule.amount)} 차감`;
+  if (rule.type === 'service') return `${RULE_TYPES.service.icon} 집안일 봉사 ${rule.count}회`;
+  return `${RULE_TYPES.warning.icon} 경고`;
+}
+
 // count가 음수면 집안일 봉사를 줄인다 (해제).
 export function serviceRecord(member, count, reason) {
   if (!Number.isInteger(count) || count === 0) throw new Error('봉사 횟수를 입력해 주세요.');

@@ -326,6 +326,14 @@ button.card:disabled { opacity: .55; cursor: default; }
 .switch input { width: 20px; height: 20px; accent-color: var(--primary); }
 .done-head { display: flex; align-items: center; gap: 14px; margin: 4px 0 10px; }
 
+/* 생활 규칙 */
+.rules-note { font-size: 15px; line-height: 1.6; background: var(--primary-soft); border-color: transparent; white-space: pre-line; }
+.rule-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding-left: 52px; }
+.rule-actions { display: flex; gap: 6px; }
+.tag.rule-money { background: rgba(220, 38, 38, .1); color: var(--minus); border-color: transparent; font-weight: 700; font-size: 12px; padding: 3px 9px; }
+.tag.rule-service { background: #ede9fe; color: #6d28d9; border-color: transparent; font-weight: 700; font-size: 12px; padding: 3px 9px; }
+.tag.rule-warning { background: var(--warn-bg); color: var(--warn-text); border-color: transparent; font-weight: 700; font-size: 12px; padding: 3px 9px; }
+
 /* 여러 계정: 누가 사용하나요? */
 .profiles { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin: 24px 0 12px; }
 .profile-btn {

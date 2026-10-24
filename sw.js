@@ -1,6 +1,6 @@
 // 앱 화면 파일은 네트워크 우선(업데이트 바로 반영), CDN 라이브러리는 캐시 우선으로 저장한다.
 // 앱 파일을 고쳐서 올릴 때마다 아래 버전을 바꾸면, 설치된 앱이 새 버전을 받고 스스로 새로 고친다.
-const CACHE = 'chore-v12';
+const CACHE = 'chore-v13';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/logic.js', './js/config.js',

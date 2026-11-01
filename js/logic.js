@@ -158,9 +158,6 @@ export function pendingPayoutSum(requests, childId) {
 
 // 지급 요청이 가능한지 검사한다. 불가능하면 이유를, 가능하면 null을 돌려준다.
 export function checkPayout(member, requests, amount) {
-  if (member.serviceRemaining > 0) {
-    return `집안일 봉사가 ${member.serviceRemaining}회 남아 있어서 지급 요청을 할 수 없어요.`;
-  }
   const available = (member.balance || 0) - pendingPayoutSum(requests, member.id);
   if (available <= 0) return '요청할 수 있는 잔액이 없어요.';
   if (!Number.isInteger(amount) || amount <= 0) return '금액을 입력해 주세요.';

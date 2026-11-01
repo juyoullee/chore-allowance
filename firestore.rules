@@ -43,8 +43,7 @@ service cloud.firestore {
     function validPayoutRequest(fid) {
       let r = request.resource.data;
       return r.type == 'payout' && r.status == 'pending' && r.amount > 0
-        && r.amount <= me(fid).balance
-        && me(fid).get('serviceRemaining', 0) == 0;
+        && r.amount <= me(fid).balance;
     }
 
     // 특별 활동 요청: 자녀가 이름·금액·사유를 직접 적는다. 사유는 필수, 부모 승인 대기

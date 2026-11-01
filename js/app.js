@@ -11,7 +11,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v17 (11/1)';
+const APP_VERSION = 'v18 (11/1)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -63,6 +63,16 @@ function Modal({ title, onClose, children }) {
         </div>
         ${children}
       </div>
+    </div>`;
+}
+
+// 지급할 때 마이너스 용돈을 갚고 최종으로 받는 금액
+function PayCalc({ amount, repay }) {
+  return html`
+    <div class="pay-calc">
+      <div><span>요청 금액</span><span>${won(amount)}</span></div>
+      <div><span>마이너스 용돈 상환 (10%)</span><span class="minus">-${won(repay)}</span></div>
+      <div class="total"><span>최종 지급 용돈</span><span>${won(amount - repay)}</span></div>
     </div>`;
 }
 
@@ -455,7 +465,7 @@ function ApproveHint({ r, member, requests, chores, family, asService }) {
   if (r.type === 'payout') {
     const repay = payoutRepay(r.amount, member?.debt);
     return html`<p class="hint">현재 잔액 ${won(member?.balance)} · 용돈을 실제로 준 다음 승인하세요.</p>
-      ${repay > 0 && html`<p class="hint">↩️ 마이너스 용돈 ${won(repay)} 상환 → <b>실제로 줄 돈 ${won(r.amount - repay)}</b></p>`}`;
+      ${repay > 0 && html`<${PayCalc} amount=${r.amount} repay=${repay} />`}`;
   }
   if (r.type === 'custom') {
     return html`<p class="hint">⭐ 자녀가 직접 적은 금액이에요. 금액이 맞지 않으면 반려하고 다시 요청하게 해 주세요.</p>`;
@@ -486,7 +496,9 @@ function ApproveTab({ fid, requests, members, chores, family }) {
     return done + before < quota;
   };
   const okMsg = (r) => {
-    if (r.type === 'payout') return '지급 완료로 기록했어요.';
+    if (r.type === 'payout') {
+      return `최종 ${won(r.amount - payoutRepay(r.amount, memberOf(r.childId)?.debt))} 지급 완료로 기록했어요.`;
+    }
     if (asService(r)) return '봉사 1회로 처리했어요.';
     return `${won(r.amount)} 적립했어요.`;
   };
@@ -1065,7 +1077,7 @@ function ServiceModal({ fid, child, settings, onClose, initialMode = 'normal' })
       <p class="muted">${servicesOf(child).length ? `진행 중: 생활 약속 위반 ${servicesOf(child).length}건` : '진행 중인 봉사가 없어요.'}</p>
       ${servicesOf(child).map((item) => html`
         <${ServiceItemCard} key=${item.id} item=${item} onOpen=${() => setEditItem(item.id)} />`)}
-      <p class="hint">봉사는 <b>기한까지 매일 정한 횟수만큼</b> 해요. 그날 승인되는 용돈 집안일이 그날 몫만큼 무급(봉사)으로 처리되고, 몫을 채운 뒤에는 평소처럼 용돈이 쌓여요. 봉사가 남아 있으면 지급 요청은 할 수 없어요.</p>
+      <p class="hint">봉사는 <b>기한까지 매일 정한 횟수만큼</b> 해요. 그날 승인되는 용돈 집안일이 그날 몫만큼 무급(봉사)으로 처리되고, 몫을 채운 뒤에는 평소처럼 용돈이 쌓여요.</p>
       <div class="seg small">
         <button class=${mode === 'normal' ? 'on' : ''} onClick=${() => setMode('normal')}>일반</button>
         <button class=${mode === 'violence' ? 'on' : ''} onClick=${() => setMode('violence')}>중대 사안</button>
@@ -1760,7 +1772,6 @@ function ChildHome({ fid, me, chores, requests, family }) {
         ${pendingPay > 0 && html`<span>지급 요청 중 ${won(pendingPay)}</span>`}
       </div>
       <button class="btn light block" onClick=${() => setPayout(true)}>용돈 지급 요청</button>
-      ${serving && html`<div class="balance-note">🤝 집안일 봉사를 다 채우면 지급 요청을 할 수 있어요</div>`}
     </div>
 
     <${GoalCard} me=${me} requests=${requests} onEdit=${() => setGoalEdit(true)} />
@@ -1840,6 +1851,8 @@ function ChildHome({ fid, me, chores, requests, family }) {
             <div class="grow">
               <div class="title">${reqTitle(r)}</div>
               <div class="muted small">${fmtTime(r.createdAt)}</div>
+              ${r.type === 'payout' && debt > 0 && html`
+                <div class="muted small">최종 지급 ${won(r.amount - payoutRepay(r.amount, debt))}</div>`}
             </div>
             <${Amount} r=${r} />
             <button class="btn small ghost" onClick=${() => confirm('요청을 취소할까요?')
@@ -1914,7 +1927,7 @@ function PayoutModal({ fid, me, requests, onClose }) {
       </label>
       <textarea rows="2" maxlength="100" placeholder="어디에 쓸지 (선택)"
         value=${memo} onInput=${(e) => setMemo(e.target.value)}></textarea>
-      ${repay > 0 && html`<p class="hint">↩️ 마이너스 용돈 ${won(repay)}을 갚고 <b>${won(value - repay)}</b>을 받아요.</p>`}
+      ${repay > 0 && html`<${PayCalc} amount=${value} repay=${repay} />`}
       ${error && html`<p class="error">${error}</p>`}
       <button class="btn primary block" disabled=${!!error} onClick=${submit}>요청 보내기</button>
     <//>`;

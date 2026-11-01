@@ -284,9 +284,9 @@ export default {
       }
       const mRef = famRef(fid, 'members', req.childId);
       const mSnap = await tx.get(mRef);
-      const { serviceUsed, ...memberPatch } = approvalEffect(req, mSnap.data());
+      const { serviceUsed, repaid, ...memberPatch } = approvalEffect(req, mSnap.data());
       tx.update(mRef, memberPatch);
-      tx.update(rRef, { ...decided, status: 'approved', balanceAfter: memberPatch.balance, serviceUsed });
+      tx.update(rRef, { ...decided, status: 'approved', balanceAfter: memberPatch.balance, serviceUsed, repaid });
       // 특별 미션은 한 번 승인되면 끝난다.
       if (req.choreKind === 'mission') {
         tx.update(famRef(fid, 'chores', req.choreId), { done: true, doneBy: req.childId, doneAt: serverTimestamp() });

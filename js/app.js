@@ -4,14 +4,14 @@ import {
   won, sum, fmtTime, fmtDate, startOfDay, startOfWeek, startOfMonth, addMonths, monthCells,
   todayCount, pendingPayoutSum, checkPayout, checkCustom, CUSTOM_MAX, choreVisibleTo, errorMessage,
   KINDS, choreKind, missionRequest, isOverdue, dueLabel, dateInputToDue, dueToDateInput, goalProgress,
-  settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, serviceRecord, priceFor, targetsChild,
+  settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, advanceRecord, repayRecord, payoutRepay, serviceRecord, priceFor, targetsChild,
   RULE_TYPES, rulesOf, rulesNoteOf, ruleEffect, defaultServiceDue, serviceToday, servicesOf, serviceItemChange, serviceTarget, serviceDays, perDayOf, doneOn,
 } from './logic.js';
 
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v15 (11/1)';
+const APP_VERSION = 'v16 (11/1)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -74,18 +74,20 @@ const reqTitle = (r) => ({
   payout: '용돈 지급 요청',
   bonus: `${r.streakDays}일 연속 달성 보너스`,
   penalty: '차감',
+  advance: '가불·선지급',
+  repay: '마이너스 용돈 상환',
   service: r.count > 0 ? '집안일 봉사 부여' : r.count < 0 ? '집안일 봉사 줄임·종료' : '집안일 봉사 수정',
 }[r.type] || r.choreName);
-const reqIcon = (r) => ({ payout: '💸', bonus: '🔥', penalty: '🚫', service: '🤝' }[r.type] || r.emoji);
+const reqIcon = (r) => ({ payout: '💸', bonus: '🔥', penalty: '🚫', service: '🤝', advance: '💳', repay: '↩️' }[r.type] || r.emoji);
 const statusLabel = { pending: '대기', approved: '승인', rejected: '반려' };
 const statusText = (r) => {
   if (r.type === 'duty') return '완료';
-  if (r.type === 'penalty' || r.type === 'service') return '부모 기록';
+  if (['penalty', 'service', 'advance', 'repay'].includes(r.type)) return '부모 기록';
   if (r.serviceUsed) return '봉사로 처리';
   return statusLabel[r.status];
 };
 // 기록에 이유를 보여 줄지 (반려 사유, 차감·봉사 사유)
-const showReason = (r) => r.reason && (r.status === 'rejected' || r.type === 'penalty' || r.type === 'service');
+const showReason = (r) => r.reason && (r.status === 'rejected' || ['penalty', 'service', 'advance'].includes(r.type));
 
 function Amount({ r }) {
   if (r.type === 'duty') return html`<div class="amount check-mark">✔</div>`;
@@ -93,7 +95,7 @@ function Amount({ r }) {
     return html`<div class="amount service">${r.count > 0 ? '부여' : r.count < 0 ? '종료' : '수정'}</div>`;
   }
   if (r.serviceUsed) return html`<div class="amount service">봉사</div>`;
-  const minus = r.type === 'payout' || r.type === 'penalty';
+  const minus = ['payout', 'penalty', 'advance', 'repay'].includes(r.type);
   return html`<div class=${`amount ${minus ? 'minus' : 'plus'} ${r.status === 'rejected' ? 'struck' : ''}`}>
     ${minus ? '-' : '+'}${won(r.amount)}
   </div>`;
@@ -451,7 +453,9 @@ function DutyStatus({ chores, members, requests }) {
 // 승인 카드 아래에 붙는 안내 (지급, 봉사 처리, 연속 보너스)
 function ApproveHint({ r, member, requests, chores, family, asService }) {
   if (r.type === 'payout') {
-    return html`<p class="hint">현재 잔액 ${won(member?.balance)} · 용돈을 실제로 준 다음 승인하세요.</p>`;
+    const repay = payoutRepay(r.amount, member?.debt);
+    return html`<p class="hint">현재 잔액 ${won(member?.balance)} · 용돈을 실제로 준 다음 승인하세요.</p>
+      ${repay > 0 && html`<p class="hint">↩️ 마이너스 용돈 ${won(repay)} 상환 → <b>실제로 줄 돈 ${won(r.amount - repay)}</b></p>`}`;
   }
   if (r.type === 'custom') {
     return html`<p class="hint">⭐ 자녀가 직접 적은 금액이에요. 금액이 맞지 않으면 반려하고 다시 요청하게 해 주세요.</p>`;
@@ -794,6 +798,8 @@ function FamilyTab({ fid, family, members, requests, chores }) {
   const parents = members.filter((m) => m.role === 'parent');
   const settings = settingsOf(family);
   const [penaltyFor, setPenaltyFor] = useState(null);
+  const [advanceFor, setAdvanceFor] = useState(null);
+  const [repayFor, setRepayFor] = useState(null);
   const [serviceFor, setServiceFor] = useState(null);
   const [editSettings, setEditSettings] = useState(false);
   const [renameFamily, setRenameFamily] = useState(false);
@@ -821,11 +827,19 @@ function FamilyTab({ fid, family, members, requests, chores }) {
               ${c.goal?.amount > 0 && html`
                 <div class="muted small">목표 ${c.goal.emoji || '🎯'} ${c.goal.name} · ${goalProgress(c, requests).pct}%</div>`}
             </div>
-            <div class="price">${won(c.balance)}</div>
+            <div class="money-pair">
+              <div><div class="muted small">모은 용돈</div><div class="price">${won(c.balance)}</div></div>
+              <div><div class="muted small">마이너스 용돈</div>
+                <div class=${`price ${c.debt > 0 ? 'debt' : ''}`}>${c.debt > 0 ? `-${won(c.debt)}` : won(0)}</div></div>
+            </div>
           </div>
           <div class="actions even">
             <button class="btn small" onClick=${() => setPenaltyFor(c)}>🚫 차감</button>
             <button class="btn small" onClick=${() => setServiceFor(c)}>🤝 집안일 봉사</button>
+          </div>
+          <div class="actions even">
+            <button class="btn small" onClick=${() => setAdvanceFor(c)}>💳 가불·선지급</button>
+            <button class="btn small" disabled=${!(c.debt > 0)} onClick=${() => setRepayFor(c)}>↩️ 한 번에 갚기</button>
           </div>
         </div>`;
     })}
@@ -843,6 +857,10 @@ function FamilyTab({ fid, family, members, requests, chores }) {
 
     ${penaltyFor && html`
       <${PenaltyModal} fid=${fid} child=${members.find((m) => m.id === penaltyFor.id)} onClose=${() => setPenaltyFor(null)} />`}
+    ${advanceFor && html`
+      <${AdvanceModal} fid=${fid} child=${members.find((m) => m.id === advanceFor.id)} onClose=${() => setAdvanceFor(null)} />`}
+    ${repayFor && html`
+      <${RepayModal} fid=${fid} child=${members.find((m) => m.id === repayFor.id)} onClose=${() => setRepayFor(null)} />`}
     ${serviceFor && html`
       <${ServiceModal} fid=${fid} child=${members.find((m) => m.id === serviceFor.id)} settings=${settings}
         onClose=${() => setServiceFor(null)} />`}
@@ -912,6 +930,54 @@ function PenaltyModal({ fid, child, onClose }) {
       </label>
       <button class="btn danger block" disabled=${balance <= 0} onClick=${submit}>
         ${balance <= 0 ? '차감할 잔액이 없어요' : '차감하기'}
+      </button>
+    <//>`;
+}
+
+function AdvanceModal({ fid, child, onClose }) {
+  const [reason, setReason] = useState('');
+  const [amount, setAmount] = useState('');
+  const submit = async () => {
+    if (!reason.trim()) return toast('마이너스 사유를 입력해 주세요.');
+    const value = Number(amount);
+    const ok = await run(() => store.addRecord(fid, child.id, (m) => advanceRecord(m, value, reason.trim())),
+      `마이너스 용돈 ${won(value)}을 기록했어요.`);
+    if (ok) onClose();
+  };
+  return html`
+    <${Modal} title=${`${child.name} 가불·선지급`} onClose=${onClose}>
+      <p class="muted">현재 마이너스 용돈 <b>${won(child.debt)}</b> · 돈을 먼저 준 다음 기록하세요.</p>
+      <label class="field">마이너스 사유 (꼭 적어 주세요)
+        <textarea rows="2" maxlength="100" placeholder="예: 친구 생일 선물을 사려고 미리 받음" value=${reason}
+          onInput=${(e) => setReason(e.target.value)}></textarea>
+      </label>
+      <label class="field">미리 준 금액 (원)
+        <input type="number" inputmode="numeric" min="1" step="100" value=${amount} onInput=${(e) => setAmount(e.target.value)} />
+      </label>
+      <p class="hint">용돈을 지급할 때마다 지급액의 10%가 자동으로 상환돼요. 모은 용돈에서 한 번에 갚을 수도 있어요.</p>
+      <button class="btn primary block" onClick=${submit}>기록하기</button>
+    <//>`;
+}
+
+function RepayModal({ fid, child, onClose }) {
+  const balance = child.balance || 0;
+  const debt = child.debt || 0;
+  const most = Math.min(balance, debt);
+  const [amount, setAmount] = useState(String(most));
+  const submit = async () => {
+    const value = Number(amount);
+    const ok = await run(() => store.addRecord(fid, child.id, (m) => repayRecord(m, value)),
+      `${won(value)} 갚았어요.`);
+    if (ok) onClose();
+  };
+  return html`
+    <${Modal} title=${`${child.name} 한 번에 갚기`} onClose=${onClose}>
+      <p class="muted">모은 용돈 <b>${won(balance)}</b> · 마이너스 용돈 <b>${won(debt)}</b></p>
+      <label class="field">모은 용돈에서 갚을 금액 (원)
+        <input type="number" inputmode="numeric" min="1" max=${most} step="100" value=${amount} onInput=${(e) => setAmount(e.target.value)} />
+      </label>
+      <button class="btn primary block" disabled=${most <= 0} onClick=${submit}>
+        ${most <= 0 ? '갚을 수 있는 용돈이 없어요' : '갚기'}
       </button>
     <//>`;
 }
@@ -1314,8 +1380,12 @@ function HistoryTab({ requests, members, onlyChild }) {
     && r.createdAt >= month && r.createdAt < monthEnd);
   const done = list.filter(isWork);
   const earned = list.reduce((s, r) => s + earnedAmount(r), 0);
-  const paid = sum(list.filter((r) => r.type === 'payout' && r.status === 'approved'));
+  const payouts = list.filter((r) => r.type === 'payout' && r.status === 'approved');
+  const repaidInPayout = payouts.reduce((s, r) => s + (r.repaid || 0), 0);
+  const paid = sum(payouts) - repaidInPayout; // 실제로 건넨 돈
   const penalty = sum(list.filter((r) => r.type === 'penalty'));
+  const advance = sum(list.filter((r) => r.type === 'advance'));
+  const repaid = sum(list.filter((r) => r.type === 'repay')) + repaidInPayout;
 
   const perDay = new Map();
   const perChore = new Map();
@@ -1356,6 +1426,7 @@ function HistoryTab({ requests, members, onlyChild }) {
       <div class="stat"><div class="muted small">지급</div><div class="minus">${won(paid)}</div></div>
     </div>
     ${penalty > 0 && html`<p class="hint">이 달 차감 ${won(penalty)}</p>`}
+    ${(advance > 0 || repaid > 0) && html`<p class="hint">이 달 가불 ${won(advance)} · 상환 ${won(repaid)}</p>`}
 
     ${top.length > 0 && html`
       <h3 class="day">많이 한 집안일</h3>
@@ -1381,6 +1452,7 @@ function HistoryTab({ requests, members, onlyChild }) {
                 <span class=${`status ${r.status}`}>${statusText(r)}</span>
               </div>
               ${showReason(r) && html`<div class="reason">사유: ${r.reason}</div>`}
+              ${r.repaid > 0 && html`<div class="reason">마이너스 용돈 ${won(r.repaid)} 상환 · 실제 지급 ${won(r.amount - r.repaid)}</div>`}
             </div>
             <${Amount} r=${r} />
           </div>`)}
@@ -1610,6 +1682,8 @@ function ChildHome({ fid, me, chores, requests, family }) {
   const pendingEarn = sum(pending.filter((r) => ['chore', 'bonus', 'custom'].includes(r.type)));
   const weekEarn = mine.filter((r) => r.createdAt >= startOfWeek()).reduce((s, r) => s + earnedAmount(r), 0);
   const pendingPay = pendingPayoutSum(requests, me.id);
+  const debt = me.debt || 0;
+  const lastAdvance = mine.filter((r) => r.type === 'advance').sort((a, b) => b.createdAt - a.createdAt)[0];
 
   const visible = chores.filter((c) => choreVisibleTo(c, me.id));
   const duties = visible.filter((c) => choreKind(c) === 'duty');
@@ -1639,8 +1713,21 @@ function ChildHome({ fid, me, chores, requests, family }) {
 
   return html`
     <div class="balance-card">
-      <div class="small">모은 용돈</div>
-      <div class="balance">${won(me.balance)}</div>
+      <div class=${`balance-row ${debt > 0 ? 'two' : ''}`}>
+        <div>
+          <div class="small">모은 용돈</div>
+          <div class="balance">${won(me.balance)}</div>
+        </div>
+        ${debt > 0 && html`
+          <div>
+            <div class="small">마이너스 용돈</div>
+            <div class="balance">-${won(debt)}</div>
+          </div>`}
+      </div>
+      ${debt > 0 && html`<div class="balance-debt">
+        ${lastAdvance && html`<div>사유: ${lastAdvance.reason}</div>`}
+        <div>용돈을 받을 때 10%씩 자동으로 갚아요.</div>
+      </div>`}
       <div class="balance-sub">
         <span>이번 주 +${won(weekEarn)}</span>
         ${pendingEarn > 0 && html`<span>승인 대기 +${won(pendingEarn)}</span>`}
@@ -1781,6 +1868,7 @@ function PayoutModal({ fid, me, requests, onClose }) {
   const [memo, setMemo] = useState('');
   const value = Number(amount);
   const error = checkPayout(me, requests, value);
+  const repay = error ? 0 : payoutRepay(value, me.debt);
 
   const submit = async () => {
     if (error) return toast(error);
@@ -1800,6 +1888,7 @@ function PayoutModal({ fid, me, requests, onClose }) {
       </label>
       <textarea rows="2" maxlength="100" placeholder="어디에 쓸지 (선택)"
         value=${memo} onInput=${(e) => setMemo(e.target.value)}></textarea>
+      ${repay > 0 && html`<p class="hint">↩️ 마이너스 용돈 ${won(repay)}을 갚고 <b>${won(value - repay)}</b>을 받아요.</p>`}
       ${error && html`<p class="error">${error}</p>`}
       <button class="btn primary block" disabled=${!!error} onClick=${submit}>요청 보내기</button>
     <//>`;

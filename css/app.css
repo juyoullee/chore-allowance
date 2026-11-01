@@ -295,6 +295,11 @@ button.card:disabled { opacity: .55; cursor: default; }
   color: #fff; border-radius: 20px; padding: 20px; margin-top: 8px;
 }
 .balance { font-size: 36px; font-weight: 800; margin: 2px 0 6px; }
+.balance-row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.balance-row.two .balance { font-size: 26px; }
+.balance-debt { font-size: 13px; opacity: .92; margin-bottom: 8px; }
+.money-pair { display: flex; gap: 14px; text-align: right; flex-shrink: 0; }
+.price.debt { color: #dc2626; }
 .balance-sub { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; opacity: .92; margin-bottom: 16px; }
 .chore-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .chore-tile {

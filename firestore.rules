@@ -108,8 +108,8 @@ service cloud.firestore {
               || (request.resource.data.type == 'bonus' && validBonusRequest(fid))
               || (request.resource.data.type == 'custom' && validCustomRequest())
               || (request.resource.data.type in ['chore', 'duty'] && validChoreRequest(fid))))
-          // 부모는 차감·봉사 의무 기록을 직접 남긴다.
-          || (isParent(fid) && request.resource.data.type in ['penalty', 'service']
+          // 부모는 차감·봉사 의무·가불·상환 기록을 직접 남긴다.
+          || (isParent(fid) && request.resource.data.type in ['penalty', 'service', 'advance', 'repay']
               && request.resource.data.status == 'approved');
         allow update: if isParent(fid);
         // 자녀는 대기 중인 요청을 취소하거나, 체크한 기본 할 일을 해제할 수 있다.

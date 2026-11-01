@@ -232,12 +232,18 @@ export function approvalEffect(req, member) {
     const next = servicesOf(member).map((s) => (s.id === target.id
       ? { ...s, remaining: s.remaining - 1, lastDay: day, dayDone: doneOn(s, day) + 1 }
       : s));
-    return { balance, serviceUsed: true, ...servicePatch(next) };
+    return { balance, serviceUsed: true, repaid: 0, ...servicePatch(next) };
   }
   const after = balance + (req.type === 'payout' ? -req.amount : req.amount);
   if (after < 0) throw new Error('잔액이 부족해서 승인할 수 없어요.');
-  return { balance: after, serviceRemaining: service, serviceUsed: false };
+  const effect = { balance: after, serviceRemaining: service, serviceUsed: false, repaid: 0 };
+  if (req.type !== 'payout' || !member.debt) return effect;
+  const repaid = payoutRepay(req.amount, member.debt);
+  return { ...effect, debt: member.debt - repaid, repaid };
 }
+
+// 지급할 때 마이너스 용돈이 있으면 지급액의 10%를 상환한다 (남은 마이너스 용돈까지만).
+export const payoutRepay = (amount, debt) => Math.min(debt || 0, Math.ceil(amount * 0.1));
 
 /* ───────── 2차: 연속 보너스 · 차감 · 집안일 봉사 ───────── */
 
@@ -313,6 +319,30 @@ export function penaltyRecord(member, amount, reason) {
   return {
     patch: { balance: balance - amount },
     record: { type: 'penalty', amount, reason, balanceAfter: balance - amount },
+  };
+}
+
+// 가불·선지급: 모은 용돈은 그대로 두고 마이너스 용돈(debt)만 늘린다.
+export function advanceRecord(member, amount, reason) {
+  const debt = member.debt || 0;
+  if (!Number.isInteger(amount) || amount <= 0) throw new Error('가불 금액을 입력해 주세요.');
+  if (!reason) throw new Error('마이너스 사유를 입력해 주세요.');
+  return {
+    patch: { debt: debt + amount },
+    record: { type: 'advance', amount, reason, debtAfter: debt + amount },
+  };
+}
+
+// 모은 용돈으로 마이너스 용돈을 한 번에 갚는다.
+export function repayRecord(member, amount) {
+  const balance = member.balance || 0;
+  const debt = member.debt || 0;
+  if (!Number.isInteger(amount) || amount <= 0) throw new Error('갚을 금액을 입력해 주세요.');
+  if (amount > debt) throw new Error(`마이너스 용돈(${won(debt)})보다 많이 갚을 수 없어요.`);
+  if (amount > balance) throw new Error(`모은 용돈(${won(balance)})보다 많이 갚을 수 없어요.`);
+  return {
+    patch: { balance: balance - amount, debt: debt - amount },
+    record: { type: 'repay', amount, balanceAfter: balance - amount, debtAfter: debt - amount },
   };
 }
 

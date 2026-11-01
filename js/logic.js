@@ -333,6 +333,35 @@ export function advanceRecord(member, amount, reason) {
   };
 }
 
+// 가불 기록을 고치거나(amount, reason) 지운다(amount가 null). change가 null이면 기록을 지운다.
+export function advanceChange(member, req, amount, reason) {
+  const debt = member.debt || 0;
+  const paidBack = req.amount - debt; // 이 기록에서 이미 갚은 금액
+  if (amount === null) {
+    if (paidBack > 0) throw new Error(`이미 ${won(paidBack)}을 갚아서 지울 수 없어요. 금액을 고쳐 주세요.`);
+    return { patch: { debt: debt - req.amount }, change: null };
+  }
+  if (!Number.isInteger(amount) || amount <= 0) throw new Error('가불 금액을 입력해 주세요.');
+  if (!reason) throw new Error('마이너스 사유를 입력해 주세요.');
+  if (amount < paidBack) throw new Error(`이미 갚은 ${won(paidBack)}보다 적게 고칠 수 없어요.`);
+  const next = debt + amount - req.amount;
+  return { patch: { debt: next }, change: { amount, reason, debtAfter: next } };
+}
+
+// 아직 다 갚지 않은 가불 기록: 최근 것부터 마이너스 용돈이 채워질 때까지 모은다.
+export function openAdvances(requests, childId, debt) {
+  const list = [];
+  let left = debt || 0;
+  const all = requests.filter((r) => r.type === 'advance' && r.childId === childId)
+    .sort((a, b) => b.createdAt - a.createdAt);
+  for (const r of all) {
+    if (left <= 0) break;
+    list.push(r);
+    left -= r.amount;
+  }
+  return list;
+}
+
 // 모은 용돈으로 마이너스 용돈을 한 번에 갚는다.
 export function repayRecord(member, amount) {
   const balance = member.balance || 0;

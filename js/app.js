@@ -4,14 +4,14 @@ import {
   won, sum, fmtTime, fmtDate, startOfDay, startOfWeek, startOfMonth, addMonths, monthCells,
   todayCount, pendingPayoutSum, checkPayout, checkCustom, CUSTOM_MAX, choreVisibleTo, errorMessage,
   KINDS, choreKind, missionRequest, isOverdue, dueLabel, dateInputToDue, dueToDateInput, goalProgress,
-  settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, advanceRecord, repayRecord, payoutRepay, serviceRecord, priceFor, targetsChild,
+  settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, advanceRecord, advanceChange, openAdvances, repayRecord, payoutRepay, serviceRecord, priceFor, targetsChild,
   RULE_TYPES, rulesOf, rulesNoteOf, ruleEffect, defaultServiceDue, serviceToday, servicesOf, serviceItemChange, serviceTarget, serviceDays, perDayOf, doneOn,
 } from './logic.js';
 
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v16 (11/1)';
+const APP_VERSION = 'v17 (11/1)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -799,6 +799,7 @@ function FamilyTab({ fid, family, members, requests, chores }) {
   const settings = settingsOf(family);
   const [penaltyFor, setPenaltyFor] = useState(null);
   const [advanceFor, setAdvanceFor] = useState(null);
+  const [advanceEdit, setAdvanceEdit] = useState(null); // { child, record }
   const [repayFor, setRepayFor] = useState(null);
   const [serviceFor, setServiceFor] = useState(null);
   const [editSettings, setEditSettings] = useState(false);
@@ -841,6 +842,16 @@ function FamilyTab({ fid, family, members, requests, chores }) {
             <button class="btn small" onClick=${() => setAdvanceFor(c)}>💳 가불·선지급</button>
             <button class="btn small" disabled=${!(c.debt > 0)} onClick=${() => setRepayFor(c)}>↩️ 한 번에 갚기</button>
           </div>
+          ${openAdvances(requests, c.id, c.debt).map((r) => html`
+            <div class="row-item advance-row" key=${r.id}>
+              <span class="emoji small">💳</span>
+              <div class="grow">
+                <div class="title">${r.reason}</div>
+                <div class="muted small">${fmtDate(r.createdAt)}</div>
+              </div>
+              <${Amount} r=${r} />
+              <button class="btn small ghost" onClick=${() => setAdvanceEdit({ child: c, record: r })}>수정</button>
+            </div>`)}
         </div>`;
     })}
 
@@ -859,6 +870,9 @@ function FamilyTab({ fid, family, members, requests, chores }) {
       <${PenaltyModal} fid=${fid} child=${members.find((m) => m.id === penaltyFor.id)} onClose=${() => setPenaltyFor(null)} />`}
     ${advanceFor && html`
       <${AdvanceModal} fid=${fid} child=${members.find((m) => m.id === advanceFor.id)} onClose=${() => setAdvanceFor(null)} />`}
+    ${advanceEdit && html`
+      <${AdvanceModal} fid=${fid} child=${members.find((m) => m.id === advanceEdit.child.id)} record=${advanceEdit.record}
+        onClose=${() => setAdvanceEdit(null)} />`}
     ${repayFor && html`
       <${RepayModal} fid=${fid} child=${members.find((m) => m.id === repayFor.id)} onClose=${() => setRepayFor(null)} />`}
     ${serviceFor && html`
@@ -934,18 +948,27 @@ function PenaltyModal({ fid, child, onClose }) {
     <//>`;
 }
 
-function AdvanceModal({ fid, child, onClose }) {
-  const [reason, setReason] = useState('');
-  const [amount, setAmount] = useState('');
+// record가 있으면 그 가불 기록을 수정·삭제한다.
+function AdvanceModal({ fid, child, record, onClose }) {
+  const [reason, setReason] = useState(record?.reason || '');
+  const [amount, setAmount] = useState(record ? String(record.amount) : '');
   const submit = async () => {
     if (!reason.trim()) return toast('마이너스 사유를 입력해 주세요.');
     const value = Number(amount);
-    const ok = await run(() => store.addRecord(fid, child.id, (m) => advanceRecord(m, value, reason.trim())),
-      `마이너스 용돈 ${won(value)}을 기록했어요.`);
+    const ok = await run(() => (record
+      ? store.changeRecord(fid, record.id, (m, req) => advanceChange(m, req, value, reason.trim()))
+      : store.addRecord(fid, child.id, (m) => advanceRecord(m, value, reason.trim()))),
+    record ? '가불 내용을 고쳤어요.' : `마이너스 용돈 ${won(value)}을 기록했어요.`);
+    if (ok) onClose();
+  };
+  const remove = async () => {
+    if (!confirm('이 가불 기록을 지울까요?')) return;
+    const ok = await run(() => store.changeRecord(fid, record.id, (m, req) => advanceChange(m, req, null)),
+      '가불 기록을 지웠어요.');
     if (ok) onClose();
   };
   return html`
-    <${Modal} title=${`${child.name} 가불·선지급`} onClose=${onClose}>
+    <${Modal} title=${`${child.name} ${record ? '가불 수정' : '가불·선지급'}`} onClose=${onClose}>
       <p class="muted">현재 마이너스 용돈 <b>${won(child.debt)}</b> · 돈을 먼저 준 다음 기록하세요.</p>
       <label class="field">마이너스 사유 (꼭 적어 주세요)
         <textarea rows="2" maxlength="100" placeholder="예: 친구 생일 선물을 사려고 미리 받음" value=${reason}
@@ -955,7 +978,8 @@ function AdvanceModal({ fid, child, onClose }) {
         <input type="number" inputmode="numeric" min="1" step="100" value=${amount} onInput=${(e) => setAmount(e.target.value)} />
       </label>
       <p class="hint">용돈을 지급할 때마다 지급액의 10%가 자동으로 상환돼요. 모은 용돈에서 한 번에 갚을 수도 있어요.</p>
-      <button class="btn primary block" onClick=${submit}>기록하기</button>
+      <button class="btn primary block" onClick=${submit}>${record ? '저장하기' : '기록하기'}</button>
+      ${record && html`<button class="btn danger-ghost block" onClick=${remove}>이 기록 지우기</button>`}
     <//>`;
 }
 
@@ -1683,7 +1707,7 @@ function ChildHome({ fid, me, chores, requests, family }) {
   const weekEarn = mine.filter((r) => r.createdAt >= startOfWeek()).reduce((s, r) => s + earnedAmount(r), 0);
   const pendingPay = pendingPayoutSum(requests, me.id);
   const debt = me.debt || 0;
-  const lastAdvance = mine.filter((r) => r.type === 'advance').sort((a, b) => b.createdAt - a.createdAt)[0];
+  const advances = openAdvances(requests, me.id, debt);
 
   const visible = chores.filter((c) => choreVisibleTo(c, me.id));
   const duties = visible.filter((c) => choreKind(c) === 'duty');
@@ -1725,7 +1749,9 @@ function ChildHome({ fid, me, chores, requests, family }) {
           </div>`}
       </div>
       ${debt > 0 && html`<div class="balance-debt">
-        ${lastAdvance && html`<div>사유: ${lastAdvance.reason}</div>`}
+        ${advances.map((r) => html`<div class="balance-debt-row" key=${r.id}>
+          <span>${fmtDate(r.createdAt)} · ${r.reason}</span><b>-${won(r.amount)}</b>
+        </div>`)}
         <div>용돈을 받을 때 10%씩 자동으로 갚아요.</div>
       </div>`}
       <div class="balance-sub">

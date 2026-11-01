@@ -148,6 +148,17 @@ export default {
     save();
   },
 
+  async changeRecord(fid, reqId, make) {
+    const f = fam(fid);
+    const req = f.requests[reqId];
+    const member = f.members[req.childId];
+    const { patch, change } = make(structuredClone(member), req);
+    Object.assign(member, patch);
+    if (change) Object.assign(req, change);
+    else delete f.requests[reqId];
+    save();
+  },
+
   async saveChore(fid, { id, ...rest }) {
     const chores = fam(fid).chores;
     if (id) Object.assign(chores[id], rest);

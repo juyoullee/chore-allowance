@@ -298,6 +298,8 @@ button.card:disabled { opacity: .55; cursor: default; }
 .balance-row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .balance-row.two .balance { font-size: 26px; }
 .balance-debt { font-size: 13px; opacity: .92; margin-bottom: 8px; }
+.balance-debt-row { display: flex; justify-content: space-between; gap: 8px; }
+.advance-row { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
 .money-pair { display: flex; gap: 14px; text-align: right; flex-shrink: 0; }
 .price.debt { color: #dc2626; }
 .balance-sub { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; opacity: .92; margin-bottom: 16px; }

@@ -252,6 +252,21 @@ export default {
     });
   },
 
+  async changeRecord(fid, reqId, make) {
+    const rRef = famRef(fid, 'requests', reqId);
+    await runTransaction(D(), async (tx) => {
+      const rSnap = await tx.get(rRef);
+      if (!rSnap.exists()) throw new Error('기록을 찾을 수 없어요.');
+      const req = rSnap.data();
+      const mRef = famRef(fid, 'members', req.childId);
+      const mSnap = await tx.get(mRef);
+      const { patch, change } = make(mSnap.data(), req);
+      tx.update(mRef, patch);
+      if (change) tx.update(rRef, change);
+      else tx.delete(rRef);
+    });
+  },
+
   async saveChore(fid, { id, ...data }) {
     if (id) await updateDoc(famRef(fid, 'chores', id), data);
     else await addDoc(famCol(fid, 'chores'), data);

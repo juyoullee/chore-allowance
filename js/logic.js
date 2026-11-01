@@ -168,6 +168,18 @@ export function checkPayout(member, requests, amount) {
   return null;
 }
 
+// 특별 활동 요청: 자녀가 활동 이름·금액·사유를 직접 적고 부모가 승인하면 적립한다.
+export const CUSTOM_MAX = 100000;
+
+// 특별 활동 요청이 가능한지 검사한다. 불가능하면 이유를, 가능하면 null을 돌려준다.
+export function checkCustom(name, amount, memo) {
+  if (!name.trim()) return '활동 이름을 입력해 주세요.';
+  if (!Number.isInteger(amount) || amount <= 0) return '금액을 입력해 주세요.';
+  if (amount > CUSTOM_MAX) return `최대 ${won(CUSTOM_MAX)}까지 요청할 수 있어요.`;
+  if (!memo.trim()) return '사유를 입력해 주세요.';
+  return null;
+}
+
 /* ───────── 집안일 봉사 (위반 1건 = 봉사 카드 1장) ─────────
    카드마다 '하루 횟수(perDay)'가 있고, 시작일부터 기한까지 매일 그만큼 한다.
    총 횟수(count) = 하루 횟수 × 날수. 그날 몫을 채우면 그다음 집안일은 평소처럼 용돈이 쌓인다. */
@@ -238,13 +250,13 @@ const addDays = (day, n) => {
   return d.getTime();
 };
 
-// 연속 달성에 들어가는 기록: 승인된 용돈 집안일, 미션, 기본 할 일
-export const isWork = (r) => (r.type === 'chore' || r.type === 'duty') && r.status === 'approved';
+// 달력에 세는 기록: 승인된 용돈 집안일, 미션, 기본 할 일, 특별 활동
+export const isWork = (r) => ['chore', 'duty', 'custom'].includes(r.type) && r.status === 'approved';
 
 // 실제로 잔액을 늘린 금액 (봉사로 처리된 집안일은 0원)
 export function earnedAmount(r) {
   if (r.status !== 'approved') return 0;
-  if (r.type === 'bonus') return r.amount;
+  if (r.type === 'bonus' || r.type === 'custom') return r.amount;
   if (r.type === 'chore' && !r.serviceUsed) return r.amount;
   return 0;
 }

@@ -1,7 +1,7 @@
 // 체험 모드 저장소: Firebase 없이 이 브라우저의 localStorage에 저장한다.
 // 탭마다 다른 사람으로 로그인할 수 있어서, 탭 두 개로 부모와 자녀 흐름을 함께 확인할 수 있다.
 import {
-  DEFAULT_CHORES, newChore, approvalEffect, initialStatus, choreKind, isOverdue, settingsOf, priceFor,
+  DEFAULT_CHORES, newChore, approvalEffect, initialStatus, choreKind, isOverdue, settingsOf, priceFor, checkCustom,
 } from '../logic.js';
 
 const KEY = 'chore-demo-v1';
@@ -168,6 +168,9 @@ export default {
     // firestore.rules와 같은 검사를 흉내 낸다.
     if (req.type === 'bonus') {
       if (req.amount !== settingsOf(f).streakBonus) throw new Error('보너스 금액이 바뀌었어요. 다시 시도해 주세요.');
+    } else if (req.type === 'custom') {
+      const error = checkCustom(req.choreName, req.amount, req.memo);
+      if (error) throw new Error(error);
     } else if (req.type !== 'payout') {
       const chore = f.chores[req.choreId];
       const kind = chore && choreKind(chore);

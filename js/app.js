@@ -2,7 +2,7 @@ import { html, render, useState, useEffect, useRef } from 'https://unpkg.com/htm
 import { isConfigured } from './config.js';
 import {
   won, sum, fmtTime, fmtDate, startOfDay, startOfWeek, startOfMonth, addMonths, monthCells,
-  todayCount, pendingPayoutSum, checkPayout, choreVisibleTo, errorMessage,
+  todayCount, pendingPayoutSum, checkPayout, checkCustom, CUSTOM_MAX, choreVisibleTo, errorMessage,
   KINDS, choreKind, missionRequest, isOverdue, dueLabel, dateInputToDue, dueToDateInput, goalProgress,
   settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, serviceRecord, priceFor, targetsChild,
   RULE_TYPES, rulesOf, rulesNoteOf, ruleEffect, defaultServiceDue, serviceToday, servicesOf, serviceItemChange, serviceTarget, serviceDays, perDayOf, doneOn,
@@ -11,7 +11,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v14 (10/24)';
+const APP_VERSION = 'v15 (11/1)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -453,6 +453,9 @@ function ApproveHint({ r, member, requests, chores, family, asService }) {
   if (r.type === 'payout') {
     return html`<p class="hint">현재 잔액 ${won(member?.balance)} · 용돈을 실제로 준 다음 승인하세요.</p>`;
   }
+  if (r.type === 'custom') {
+    return html`<p class="hint">⭐ 자녀가 직접 적은 금액이에요. 금액이 맞지 않으면 반려하고 다시 요청하게 해 주세요.</p>`;
+  }
   if (asService) {
     return html`<p class="hint service-hint">🤝 그날 해야 할 집안일 봉사 몫이라 승인하면 <b>무급(봉사)</b>으로 처리돼요.</p>`;
   }
@@ -515,6 +518,8 @@ function RejectModal({ fid, req, onClose }) {
   const [reason, setReason] = useState('');
   const quick = req.type === 'payout'
     ? ['지금은 줄 수 없어요', '금액을 다시 정해 주세요']
+    : req.type === 'custom'
+    ? ['금액을 다시 정해 주세요', '용돈을 줄 만한 활동이 아니에요', '하지 않았어요']
     : ['아직 덜 했어요', '다시 깨끗이 해 주세요', '하지 않았어요'];
   const submit = async () => {
     if (await run(() => store.decide(fid, req.id, false, reason.trim()), '반려했어요.')) onClose();
@@ -1597,11 +1602,12 @@ function ServiceItemModal({ fid, child, item, onClose }) {
 function ChildHome({ fid, me, chores, requests, family }) {
   const [doing, setDoing] = useState(null);
   const [payout, setPayout] = useState(false);
+  const [custom, setCustom] = useState(false);
   const [goalEdit, setGoalEdit] = useState(false);
   const settings = settingsOf(family);
   const mine = requests.filter((r) => r.childId === me.id);
   const pending = mine.filter((r) => r.status === 'pending');
-  const pendingEarn = sum(pending.filter((r) => r.type === 'chore' || r.type === 'bonus'));
+  const pendingEarn = sum(pending.filter((r) => ['chore', 'bonus', 'custom'].includes(r.type)));
   const weekEarn = mine.filter((r) => r.createdAt >= startOfWeek()).reduce((s, r) => s + earnedAmount(r), 0);
   const pendingPay = pendingPayoutSum(requests, me.id);
 
@@ -1704,6 +1710,14 @@ function ChildHome({ fid, me, chores, requests, family }) {
       })}
     </div>
 
+    <h2 class="section">특별 활동</h2>
+    <button class="card goal-empty" onClick=${() => setCustom(true)}>
+      <span class="emoji">⭐</span>
+      <div class="grow"><div class="title">특별 활동 요청하기</div>
+        <div class="muted small">목록에 없는 일을 했다면 직접 적어서 부모님께 요청해요</div></div>
+      <span class="muted">›</span>
+    </button>
+
     ${pending.length > 0 && html`
       <h2 class="section">부모님 확인 기다리는 중</h2>
       <div class="card list">
@@ -1722,6 +1736,7 @@ function ChildHome({ fid, me, chores, requests, family }) {
 
     ${doing && html`<${DoneModal} fid=${fid} me=${me} chore=${doing} requests=${requests} onClose=${() => setDoing(null)} />`}
     ${payout && html`<${PayoutModal} fid=${fid} me=${me} requests=${requests} onClose=${() => setPayout(false)} />`}
+    ${custom && html`<${CustomModal} fid=${fid} me=${me} onClose=${() => setCustom(false)} />`}
     ${goalEdit && html`<${GoalModal} fid=${fid} me=${me} onClose=${() => setGoalEdit(false)} />`}`;
 }
 
@@ -1785,6 +1800,41 @@ function PayoutModal({ fid, me, requests, onClose }) {
       </label>
       <textarea rows="2" maxlength="100" placeholder="어디에 쓸지 (선택)"
         value=${memo} onInput=${(e) => setMemo(e.target.value)}></textarea>
+      ${error && html`<p class="error">${error}</p>`}
+      <button class="btn primary block" disabled=${!!error} onClick=${submit}>요청 보내기</button>
+    <//>`;
+}
+
+function CustomModal({ fid, me, onClose }) {
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [memo, setMemo] = useState('');
+  const value = Number(amount);
+  const error = checkCustom(name, value, memo);
+
+  const submit = async () => {
+    if (error) return toast(error);
+    const ok = await run(() => store.createRequest(fid, {
+      type: 'custom', childId: me.id, childName: me.name, choreName: name.trim(),
+      emoji: '⭐', amount: value, memo: memo.trim(),
+    }), '부모님께 요청을 보냈어요.');
+    if (ok) onClose();
+  };
+
+  return html`
+    <${Modal} title="특별 활동 요청" onClose=${onClose}>
+      <label class="field">활동 이름
+        <input maxlength="30" placeholder="예: 동생 공부 도와주기" value=${name}
+          onInput=${(e) => setName(e.target.value)} />
+      </label>
+      <label class="field">받고 싶은 금액 (원)
+        <input type="number" inputmode="numeric" min="1" max=${CUSTOM_MAX} step="100" value=${amount}
+          onInput=${(e) => setAmount(e.target.value)} />
+      </label>
+      <label class="field">사유 (꼭 적어 주세요)
+        <textarea rows="2" maxlength="100" placeholder="어떤 일을 했는지 적어 주세요"
+          value=${memo} onInput=${(e) => setMemo(e.target.value)}></textarea>
+      </label>
       ${error && html`<p class="error">${error}</p>`}
       <button class="btn primary block" disabled=${!!error} onClick=${submit}>요청 보내기</button>
     <//>`;

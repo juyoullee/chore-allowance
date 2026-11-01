@@ -4,6 +4,7 @@ rules_version = '2';
 // - 같은 가족 구성원만 가족 데이터를 볼 수 있다.
 // - 집안일 항목·가격 변경, 승인/반려, 잔액 변경은 부모만 할 수 있다.
 // - 자녀는 자기 이름으로만 요청을 만들 수 있고, 금액은 현재 가격/잔액을 넘을 수 없다.
+//   (특별 활동은 자녀가 금액을 직접 적되 10만원까지, 부모 승인 후 적립)
 // - 자녀는 자기 저축 목표(goal)와 이름만 바꿀 수 있다.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -44,6 +45,15 @@ service cloud.firestore {
       return r.type == 'payout' && r.status == 'pending' && r.amount > 0
         && r.amount <= me(fid).balance
         && me(fid).get('serviceRemaining', 0) == 0;
+    }
+
+    // 특별 활동 요청: 자녀가 이름·금액·사유를 직접 적는다. 사유는 필수, 부모 승인 대기
+    function validCustomRequest() {
+      let r = request.resource.data;
+      return r.type == 'custom' && r.status == 'pending'
+        && r.amount > 0 && r.amount <= 100000
+        && r.choreName is string && r.choreName.size() > 0 && r.choreName.size() <= 30
+        && r.memo is string && r.memo.size() > 0 && r.memo.size() <= 100;
     }
 
     // 연속 달성 보너스 요청: 금액은 가족 설정값 그대로, 부모 승인 대기
@@ -96,6 +106,7 @@ service cloud.firestore {
             && request.resource.data.amount is int
             && ((request.resource.data.type == 'payout' && validPayoutRequest(fid))
               || (request.resource.data.type == 'bonus' && validBonusRequest(fid))
+              || (request.resource.data.type == 'custom' && validCustomRequest())
               || (request.resource.data.type in ['chore', 'duty'] && validChoreRequest(fid))))
           // 부모는 차감·봉사 의무 기록을 직접 남긴다.
           || (isParent(fid) && request.resource.data.type in ['penalty', 'service']

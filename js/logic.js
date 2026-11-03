@@ -316,13 +316,15 @@ export function streakInfo(requests, chores, childId, streakDays, now = Date.now
 }
 
 // 부모가 직접 남기는 기록. { patch: 자녀 계정 변경, record: 기록 문서 }를 돌려준다.
+// 잔액보다 많이 차감하면 모자란 만큼 마이너스 용돈으로 넘긴다.
 export function penaltyRecord(member, amount, reason) {
-  const balance = member.balance || 0;
   if (!Number.isInteger(amount) || amount <= 0) throw new Error('차감할 금액을 입력해 주세요.');
-  if (amount > balance) throw new Error(`잔액(${won(balance)})보다 많이 차감할 수 없어요.`);
+  const { fromBalance, toDebt } = phoneSplit(member, amount);
+  const balance = (member.balance || 0) - fromBalance;
+  const debt = (member.debt || 0) + toDebt;
   return {
-    patch: { balance: balance - amount },
-    record: { type: 'penalty', amount, reason, balanceAfter: balance - amount },
+    patch: toDebt ? { balance, debt } : { balance },
+    record: { type: 'penalty', amount, reason, toDebt, balanceAfter: balance, ...(toDebt ? { debtAfter: debt } : {}) },
   };
 }
 
@@ -352,8 +354,8 @@ export function advanceChange(member, req, amount, reason) {
   return { patch: { debt: next }, change: { amount, reason, debtAfter: next } };
 }
 
-// 이 기록이 마이너스 용돈을 늘린 금액 (가불 전액, 핸드폰 사용은 잔액이 모자란 만큼)
-export const debtPart = (r) => (r.type === 'advance' ? r.amount : r.type === 'phone' ? r.toDebt || 0 : 0);
+// 이 기록이 마이너스 용돈을 늘린 금액 (가불 전액, 핸드폰 사용·차감은 잔액이 모자란 만큼)
+export const debtPart = (r) => (r.type === 'advance' ? r.amount : ['phone', 'penalty'].includes(r.type) ? r.toDebt || 0 : 0);
 
 // 아직 다 갚지 않은 마이너스 기록: 최근 것부터 마이너스 용돈이 채워질 때까지 모은다.
 export function openAdvances(requests, childId, debt) {
@@ -435,9 +437,23 @@ export function instantRecord(member, { chore, name, amount }, now = Date.now())
   };
 }
 
-/* ───────── 우리 집 규칙 (읽어 보는 목록) ───────── */
+/* ───────── 가족이 합의한 규칙 (v21) ───────── */
 
-export const houseRulesOf = (family) => family?.houseRules || [];
+// 한 번만 약속과 벌칙 목록 뒤에 붙인다 (family.rulesAdded 에 기록). 이미 같은 id가 있으면 건너뛴다.
+export const RULES_V21 = [
+  { id: 'r21-major', emoji: '🏫', title: '중대 사안 확인', desc: '학교에서 사실이 확인되면 적용해요.', type: 'money', amount: 20000 },
+  { id: 'r21-major-up', emoji: '🏛️', title: '중대 사안 상급 기관 이관', desc: '교육청으로 넘어가면 추가로 적용해요.', type: 'money', amount: 10000 },
+  { id: 'r21-unlock1', emoji: '🔓', title: '핸드폰 잠금 몰래 풀기 (1차)', desc: '3일 동안 핸드폰을 쓸 수 없어요.', type: 'service', count: 1 },
+  { id: 'r21-unlock2', emoji: '🔓', title: '핸드폰 잠금 몰래 풀기 (2차부터)', desc: '7일 동안 핸드폰을 쓸 수 없어요.', type: 'money', amount: 5000 },
+  { id: 'r21-mood1', emoji: '⚠️', title: '분위기를 나쁘게 하는 행동 (1번째)', desc: '소리 지르기, 욕설, 문 쾅 닫기, 비꼬는 말', type: 'warning' },
+  { id: 'r21-mood2', emoji: '😤', title: '분위기를 나쁘게 하는 행동 (같은 날 또)', desc: '경고를 받은 뒤 같은 날 또 하면 적용해요.', type: 'service', count: 1 },
+];
+
+export function rulesWithV21(family) {
+  const list = rulesOf(family);
+  const have = new Set(list.map((r) => r.id));
+  return [...list, ...RULES_V21.filter((r) => !have.has(r.id))];
+}
 
 // 모은 용돈으로 마이너스 용돈을 한 번에 갚는다.
 export function repayRecord(member, amount) {

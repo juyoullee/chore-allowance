@@ -231,6 +231,13 @@ export function approvalEffect(req, member) {
       : s));
     return { balance, serviceUsed: true, repaid: 0, ...servicePatch(next) };
   }
+  if (req.type === 'phone') {
+    const { fromBalance, toDebt } = phoneSplit(member, req.amount);
+    return {
+      balance: balance - fromBalance, debt: (member.debt || 0) + toDebt,
+      serviceRemaining: service, serviceUsed: false, repaid: 0, toDebt,
+    };
+  }
   const after = balance + (req.type === 'payout' ? -req.amount : req.amount);
   if (after < 0) throw new Error('잔액이 부족해서 승인할 수 없어요.');
   const effect = { balance: after, serviceRemaining: service, serviceUsed: false, repaid: 0 };
@@ -244,7 +251,7 @@ export const payoutRepay = (amount, debt) => Math.min(debt || 0, Math.ceil(amoun
 
 /* ───────── 2차: 연속 보너스 · 차감 · 집안일 봉사 ───────── */
 
-export const DEFAULT_SETTINGS = { streakDays: 7, streakBonus: 1000, violencePerCase: 2 };
+export const DEFAULT_SETTINGS = { streakDays: 7, streakBonus: 1000, violencePerCase: 2, phonePerHour: 1000 };
 export const settingsOf = (family) => ({ ...DEFAULT_SETTINGS, ...(family?.settings || {}) });
 
 const addDays = (day, n) => {
@@ -345,19 +352,92 @@ export function advanceChange(member, req, amount, reason) {
   return { patch: { debt: next }, change: { amount, reason, debtAfter: next } };
 }
 
-// 아직 다 갚지 않은 가불 기록: 최근 것부터 마이너스 용돈이 채워질 때까지 모은다.
+// 이 기록이 마이너스 용돈을 늘린 금액 (가불 전액, 핸드폰 사용은 잔액이 모자란 만큼)
+export const debtPart = (r) => (r.type === 'advance' ? r.amount : r.type === 'phone' ? r.toDebt || 0 : 0);
+
+// 아직 다 갚지 않은 마이너스 기록: 최근 것부터 마이너스 용돈이 채워질 때까지 모은다.
 export function openAdvances(requests, childId, debt) {
   const list = [];
   let left = debt || 0;
-  const all = requests.filter((r) => r.type === 'advance' && r.childId === childId)
+  const all = requests.filter((r) => r.childId === childId && r.status === 'approved' && debtPart(r) > 0)
     .sort((a, b) => b.createdAt - a.createdAt);
   for (const r of all) {
     if (left <= 0) break;
     list.push(r);
-    left -= r.amount;
+    left -= debtPart(r);
   }
   return list;
 }
+
+/* ───────── 핸드폰 사용 시간 차감 ───────── */
+
+// 사용한 분 → 차감 금액 (1시간에 perHour원, 1원 단위 반올림. 예: 97분 → 1,617원)
+export const phoneAmount = (minutes, perHour) => Math.round((minutes * perHour) / 60);
+
+export function fmtMinutes(min) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m}분`;
+  return m ? `${h}시간 ${m}분` : `${h}시간`;
+}
+
+// 잔액에서 먼저 빼고, 모자란 만큼은 마이너스 용돈으로 넘긴다.
+export function phoneSplit(member, amount) {
+  const fromBalance = Math.min(member.balance || 0, amount);
+  return { fromBalance, toDebt: amount - fromBalance };
+}
+
+// 그날 이미 입력한 핸드폰 사용 기록 (반려된 것은 제외)
+export const phoneRecordOn = (requests, childId, day) =>
+  requests.find((r) => r.type === 'phone' && r.childId === childId && r.phoneDay === day && r.status !== 'rejected');
+
+// 입력이 맞는지 검사한다. 틀리면 이유를, 맞으면 null을 돌려준다.
+export function checkPhone(minutes) {
+  if (!Number.isInteger(minutes) || minutes <= 0) return '사용한 시간을 입력해 주세요.';
+  if (minutes > 1440) return '하루는 24시간까지만 입력할 수 있어요.';
+  return null;
+}
+
+// 부모가 직접 입력: 바로 차감한다.
+export function phoneRecord(member, minutes, day, perHour) {
+  const error = checkPhone(minutes);
+  if (error) throw new Error(error);
+  const amount = phoneAmount(minutes, perHour);
+  const { fromBalance, toDebt } = phoneSplit(member, amount);
+  const balance = (member.balance || 0) - fromBalance;
+  const debt = (member.debt || 0) + toDebt;
+  return {
+    patch: { balance, debt },
+    record: { type: 'phone', amount, minutes, phoneDay: day, perHour, toDebt, balanceAfter: balance, debtAfter: debt },
+  };
+}
+
+/* ───────── 부모가 바로 지급 ───────── */
+
+// 부모가 자녀 요청 없이 바로 기록한다. 승인할 때와 같은 규칙을 따른다
+// (그날 봉사 몫이 남았으면 용돈 집안일은 봉사로 처리). chore가 없으면 직접 적은 활동(custom)이다.
+export function instantRecord(member, { chore, name, amount }, now = Date.now()) {
+  const req = chore
+    ? { type: 'chore', choreKind: choreKind(chore), amount: priceFor(chore, member.id) }
+    : { type: 'custom', amount };
+  if (!chore) {
+    if (!(name || '').trim()) throw new Error('활동 이름을 입력해 주세요.');
+    if (!Number.isInteger(amount) || amount <= 0 || amount > CUSTOM_MAX) throw new Error(`금액은 1원~${won(CUSTOM_MAX)}로 입력해 주세요.`);
+  }
+  const { serviceUsed, repaid, toDebt, ...patch } = approvalEffect({ ...req, status: 'pending', createdAt: now }, member);
+  return {
+    patch,
+    record: {
+      ...req,
+      ...(chore ? { choreId: chore.id, choreName: chore.name, emoji: chore.emoji } : { choreName: name.trim(), emoji: '⭐' }),
+      memo: '', instant: true, serviceUsed, repaid: 0, balanceAfter: patch.balance,
+    },
+  };
+}
+
+/* ───────── 우리 집 규칙 (읽어 보는 목록) ───────── */
+
+export const houseRulesOf = (family) => family?.houseRules || [];
 
 // 모은 용돈으로 마이너스 용돈을 한 번에 갚는다.
 export function repayRecord(member, amount) {

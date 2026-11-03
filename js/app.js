@@ -6,12 +6,13 @@ import {
   KINDS, choreKind, missionRequest, isOverdue, dueLabel, dateInputToDue, dueToDateInput, goalProgress,
   settingsOf, streakInfo, earnedAmount, isWork, penaltyRecord, advanceRecord, advanceChange, openAdvances, repayRecord, payoutRepay, serviceRecord, priceFor, targetsChild,
   RULE_TYPES, rulesOf, rulesNoteOf, ruleEffect, defaultServiceDue, serviceToday, servicesOf, serviceItemChange, serviceTarget, serviceDays, perDayOf, doneOn,
+  phoneAmount, fmtMinutes, phoneRecordOn, checkPhone, phoneRecord, phoneSplit, debtPart, houseRulesOf, instantRecord, dutiesOn,
 } from './logic.js';
 
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v18 (11/1)';
+const APP_VERSION = 'v19 (11/3)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -86,12 +87,16 @@ const reqTitle = (r) => ({
   penalty: '차감',
   advance: '가불·선지급',
   repay: '마이너스 용돈 상환',
+  phone: `핸드폰 사용 ${fmtMinutes(r.minutes || 0)}`,
   service: r.count > 0 ? '집안일 봉사 부여' : r.count < 0 ? '집안일 봉사 줄임·종료' : '집안일 봉사 수정',
 }[r.type] || r.choreName);
-const reqIcon = (r) => ({ payout: '💸', bonus: '🔥', penalty: '🚫', service: '🤝', advance: '💳', repay: '↩️' }[r.type] || r.emoji);
+const reqIcon = (r) => ({ payout: '💸', bonus: '🔥', penalty: '🚫', service: '🤝', advance: '💳', repay: '↩️', phone: '📱' }[r.type] || r.emoji);
+// 마이너스 용돈 목록에 보이는 이름 (가불 사유, 또는 잔액이 모자랐던 핸드폰 사용)
+const debtLabel = (r) => (r.type === 'phone' ? `핸드폰 ${fmtMinutes(r.minutes || 0)} 부족분` : r.reason);
 const statusLabel = { pending: '대기', approved: '승인', rejected: '반려' };
 const statusText = (r) => {
-  if (r.type === 'duty') return '완료';
+  if (r.type === 'duty') return r.status === 'rejected' ? '안 함' : '완료';
+  if (r.instant) return '바로 지급';
   if (['penalty', 'service', 'advance', 'repay'].includes(r.type)) return '부모 기록';
   if (r.serviceUsed) return '봉사로 처리';
   return statusLabel[r.status];
@@ -100,12 +105,14 @@ const statusText = (r) => {
 const showReason = (r) => r.reason && (r.status === 'rejected' || ['penalty', 'service', 'advance'].includes(r.type));
 
 function Amount({ r }) {
-  if (r.type === 'duty') return html`<div class="amount check-mark">✔</div>`;
+  if (r.type === 'duty') {
+    return r.status === 'rejected' ? html`<div class="amount minus">✕</div>` : html`<div class="amount check-mark">✔</div>`;
+  }
   if (r.type === 'service') {
     return html`<div class="amount service">${r.count > 0 ? '부여' : r.count < 0 ? '종료' : '수정'}</div>`;
   }
   if (r.serviceUsed) return html`<div class="amount service">봉사</div>`;
-  const minus = ['payout', 'penalty', 'advance', 'repay'].includes(r.type);
+  const minus = ['payout', 'penalty', 'advance', 'repay', 'phone'].includes(r.type);
   return html`<div class=${`amount ${minus ? 'minus' : 'plus'} ${r.status === 'rejected' ? 'struck' : ''}`}>
     ${minus ? '-' : '+'}${won(r.amount)}
   </div>`;
@@ -437,18 +444,21 @@ function ServiceStatus({ member, requests }) {
 }
 
 // 자녀별 오늘 기본 할 일 진행 상황 (+ 집안일 봉사가 있으면 오늘 봉사 여부)
-function DutyStatus({ chores, members, requests }) {
+// 눌러서 체크한 기본 할 일을 '안 함'으로 바꿀 수 있다.
+function DutyStatus({ fid, chores, members, requests }) {
+  const [checking, setChecking] = useState(null); // 자녀 id
   const rows = members.filter((m) => m.role === 'child').map((c) => {
     const duties = chores.filter((ch) => choreKind(ch) === 'duty' && choreVisibleTo(ch, c.id));
     const left = duties.filter((d) => todayCount(requests, c.id, d.id) === 0);
     return { c, duties, left };
   }).filter((r) => r.duties.length || r.c.serviceRemaining > 0);
   if (!rows.length) return null;
+  const child = checking && members.find((m) => m.id === checking);
   return html`
     <h2 class="section">오늘 기본 할 일</h2>
     <div class="card list">
       ${rows.map(({ c, duties, left }) => html`
-        <div class="row-item" key=${c.id}>
+        <button class="row-item plain block-row" key=${c.id} disabled=${!duties.length} onClick=${() => setChecking(c.id)}>
           <span class="emoji small">${left.length ? '⏳' : '✅'}</span>
           <div class="grow">
             <div class="title">${c.name}${duties.length ? ` ${duties.length - left.length}/${duties.length}` : ''}</div>
@@ -456,8 +466,52 @@ function DutyStatus({ chores, members, requests }) {
               <div class="muted small">${left.length ? `남은 일: ${left.map((d) => d.name).join(', ')}` : '모두 했어요'}</div>`}
             ${c.serviceRemaining > 0 && html`<${ServiceStatus} member=${c} requests=${requests} />`}
           </div>
-        </div>`)}
-    </div>`;
+          ${duties.length > 0 && html`<span class="muted small">확인 ›</span>`}
+        </button>`)}
+    </div>
+    ${child && html`<${DutyCheckModal} fid=${fid} child=${child} chores=${chores} requests=${requests} onClose=${() => setChecking(null)} />`}`;
+}
+
+// 부모: 자녀가 체크한 기본 할 일을 그날 '안 함'으로 바꾸거나 되돌린다 (오늘·어제).
+// '안 함'으로 바꾸면 연속 달성에서도 빠지고, 자녀는 그날 다시 체크할 수 없다.
+function DutyCheckModal({ fid, child, chores, requests, onClose }) {
+  const today = startOfDay();
+  const yesterday = startOfDay(today - 1);
+  const [day, setDay] = useState(today);
+  const duties = dutiesOn(chores, child.id, day);
+  const recordOf = (c) => requests.find((r) => r.type === 'duty' && r.childId === child.id && r.choreId === c.id
+    && startOfDay(r.createdAt) === day);
+  const refuse = (r) => run(() => store.updateRequest(fid, r.id, { status: 'rejected', reason: '부모 확인: 하지 않음' }),
+    '안 한 것으로 바꿨어요.');
+  const restore = (r) => run(() => store.updateRequest(fid, r.id, { status: 'approved', reason: '' }), '한 것으로 되돌렸어요.');
+
+  return html`
+    <${Modal} title=${`${child.name} 기본 할 일 확인`} onClose=${onClose}>
+      <div class="seg small">
+        <button class=${day === today ? 'on' : ''} onClick=${() => setDay(today)}>오늘</button>
+        <button class=${day === yesterday ? 'on' : ''} onClick=${() => setDay(yesterday)}>어제</button>
+      </div>
+      <p class="hint">하지 않았는데 체크했다면 '안 함'으로 바꾸세요. 그날은 한 것으로 치지 않고, 연속 달성도 끊겨요.</p>
+      ${!duties.length && html`<p class="hint">이 날은 기본 할 일이 없어요.</p>`}
+      <div class="card list">
+        ${duties.map((c) => {
+          const r = recordOf(c);
+          const state = !r ? 'none' : r.status === 'rejected' ? 'refused' : 'done';
+          return html`
+            <div class="row-item" key=${c.id}>
+              <span class="emoji small">${c.emoji}</span>
+              <div class="grow">
+                <div class="title">${c.name}</div>
+                <div class=${`small ${state === 'refused' ? 'error' : 'muted'}`}>
+                  ${{ none: '체크 안 함', done: `✔ 체크함 ${fmtTime(r?.createdAt)}`, refused: '✕ 부모가 안 함으로 바꿈' }[state]}
+                </div>
+              </div>
+              ${state === 'done' && html`<button class="btn small danger-ghost" onClick=${() => refuse(r)}>안 함으로</button>`}
+              ${state === 'refused' && html`<button class="btn small ghost" onClick=${() => restore(r)}>되돌리기</button>`}
+            </div>`;
+        })}
+      </div>
+    <//>`;
 }
 
 // 승인 카드 아래에 붙는 안내 (지급, 봉사 처리, 연속 보너스)
@@ -466,6 +520,11 @@ function ApproveHint({ r, member, requests, chores, family, asService }) {
     const repay = payoutRepay(r.amount, member?.debt);
     return html`<p class="hint">현재 잔액 ${won(member?.balance)} · 용돈을 실제로 준 다음 승인하세요.</p>
       ${repay > 0 && html`<${PayCalc} amount=${r.amount} repay=${repay} />`}`;
+  }
+  if (r.type === 'phone') {
+    const { fromBalance, toDebt } = phoneSplit(member || {}, r.amount);
+    return html`<p class="hint">📱 ${fmtDate(r.phoneDay || r.createdAt)} 사용 · 1시간에 ${won(settingsOf(family).phonePerHour)}씩 · 현재 잔액 ${won(member?.balance)}</p>
+      ${toDebt > 0 && html`<p class="hint error">잔액이 모자라서 ${won(fromBalance)}만 빼고, 나머지 ${won(toDebt)}은 마이너스 용돈이 돼요.</p>`}`;
   }
   if (r.type === 'custom') {
     return html`<p class="hint">⭐ 자녀가 직접 적은 금액이에요. 금액이 맞지 않으면 반려하고 다시 요청하게 해 주세요.</p>`;
@@ -484,7 +543,7 @@ function ApproveTab({ fid, requests, members, chores, family }) {
   const [rejecting, setRejecting] = useState(null);
   const pending = requests.filter((r) => r.status === 'pending').sort((a, b) => a.createdAt - b.createdAt);
   const memberOf = (id) => members.find((m) => m.id === id);
-  const duty = html`<${DutyStatus} chores=${chores} members=${members} requests=${requests} />`;
+  const duty = html`<${DutyStatus} fid=${fid} chores=${chores} members=${members} requests=${requests} />`;
   // 승인하면 봉사로 처리될지: 그날 몫(quota) - 이미 한 것(done) 이 같은 날 먼저 들어온 대기 요청 수보다 많으면 봉사
   const asService = (r) => {
     const m = memberOf(r.childId);
@@ -499,6 +558,7 @@ function ApproveTab({ fid, requests, members, chores, family }) {
     if (r.type === 'payout') {
       return `최종 ${won(r.amount - payoutRepay(r.amount, memberOf(r.childId)?.debt))} 지급 완료로 기록했어요.`;
     }
+    if (r.type === 'phone') return `${won(r.amount)} 차감했어요.`;
     if (asService(r)) return '봉사 1회로 처리했어요.';
     return `${won(r.amount)} 적립했어요.`;
   };
@@ -523,7 +583,7 @@ function ApproveTab({ fid, requests, members, chores, family }) {
         <div class="actions">
           <button class="btn" onClick=${() => setRejecting(r)}>반려</button>
           <button class="btn primary" onClick=${() => run(() => store.decide(fid, r.id, true), okMsg(r))}>
-            ${r.type === 'payout' ? '지급 완료' : asService(r) ? '승인 (봉사)' : '승인'}
+            ${r.type === 'payout' ? '지급 완료' : r.type === 'phone' ? '승인 (차감)' : asService(r) ? '승인 (봉사)' : '승인'}
           </button>
         </div>
       </div>`)}
@@ -536,6 +596,8 @@ function RejectModal({ fid, req, onClose }) {
     ? ['지금은 줄 수 없어요', '금액을 다시 정해 주세요']
     : req.type === 'custom'
     ? ['금액을 다시 정해 주세요', '용돈을 줄 만한 활동이 아니에요', '하지 않았어요']
+    : req.type === 'phone'
+    ? ['시간이 맞지 않아요', '다시 확인해서 적어 주세요']
     : ['아직 덜 했어요', '다시 깨끗이 해 주세요', '하지 않았어요'];
   const submit = async () => {
     if (await run(() => store.decide(fid, req.id, false, reason.trim()), '반려했어요.')) onClose();
@@ -814,6 +876,8 @@ function FamilyTab({ fid, family, members, requests, chores }) {
   const [advanceEdit, setAdvanceEdit] = useState(null); // { child, record }
   const [repayFor, setRepayFor] = useState(null);
   const [serviceFor, setServiceFor] = useState(null);
+  const [phoneFor, setPhoneFor] = useState(null);
+  const [instantFor, setInstantFor] = useState(null);
   const [editSettings, setEditSettings] = useState(false);
   const [renameFamily, setRenameFamily] = useState(false);
 
@@ -854,15 +918,20 @@ function FamilyTab({ fid, family, members, requests, chores }) {
             <button class="btn small" onClick=${() => setAdvanceFor(c)}>💳 가불·선지급</button>
             <button class="btn small" disabled=${!(c.debt > 0)} onClick=${() => setRepayFor(c)}>↩️ 한 번에 갚기</button>
           </div>
+          <div class="actions even">
+            <button class="btn small" onClick=${() => setInstantFor(c)}>⚡ 바로 지급</button>
+            <button class="btn small" onClick=${() => setPhoneFor(c)}>📱 핸드폰 시간 차감</button>
+          </div>
           ${openAdvances(requests, c.id, c.debt).map((r) => html`
             <div class="row-item advance-row" key=${r.id}>
-              <span class="emoji small">💳</span>
+              <span class="emoji small">${reqIcon(r)}</span>
               <div class="grow">
-                <div class="title">${r.reason}</div>
-                <div class="muted small">${fmtDate(r.createdAt)}</div>
+                <div class="title">${debtLabel(r)}</div>
+                <div class="muted small">${fmtDate(r.phoneDay || r.createdAt)}</div>
               </div>
-              <${Amount} r=${r} />
-              <button class="btn small ghost" onClick=${() => setAdvanceEdit({ child: c, record: r })}>수정</button>
+              <div class="amount minus">-${won(debtPart(r))}</div>
+              ${r.type === 'advance' && html`
+                <button class="btn small ghost" onClick=${() => setAdvanceEdit({ child: c, record: r })}>수정</button>`}
             </div>`)}
         </div>`;
     })}
@@ -876,6 +945,8 @@ function FamilyTab({ fid, family, members, requests, chores }) {
         <div class="grow">기본 할 일 연속 완료 보너스</div><b>${settings.streakDays}일 연속이면 ${won(settings.streakBonus)}</b></div>
       <div class="row-item"><span class="emoji small">🤝</span>
         <div class="grow">중대 사안 (조치 확정 1건당)</div><b>매일 집안일 봉사 ${settings.violencePerCase}회</b></div>
+      <div class="row-item"><span class="emoji small">📱</span>
+        <div class="grow">핸드폰 사용 시간</div><b>1시간에 ${won(settings.phonePerHour)} 차감</b></div>
     </div>
 
     ${penaltyFor && html`
@@ -890,6 +961,12 @@ function FamilyTab({ fid, family, members, requests, chores }) {
     ${serviceFor && html`
       <${ServiceModal} fid=${fid} child=${members.find((m) => m.id === serviceFor.id)} settings=${settings}
         onClose=${() => setServiceFor(null)} />`}
+    ${phoneFor && html`
+      <${PhoneModal} fid=${fid} child=${members.find((m) => m.id === phoneFor.id)} requests=${requests} settings=${settings}
+        asParent=${true} onClose=${() => setPhoneFor(null)} />`}
+    ${instantFor && html`
+      <${InstantModal} fid=${fid} child=${members.find((m) => m.id === instantFor.id)} chores=${chores} requests=${requests}
+        onClose=${() => setInstantFor(null)} />`}
     ${editSettings && html`<${SettingsModal} fid=${fid} settings=${settings} onClose=${() => setEditSettings(false)} />`}
 
     <h2 class="section">초대 코드</h2>
@@ -924,6 +1001,54 @@ function FamilyTab({ fid, family, members, requests, chores }) {
       <button class="btn danger-ghost block" onClick=${() => confirm('체험 데이터를 모두 지울까요?') && store.resetDemo()}>
         체험 데이터 초기화
       </button>`}`;
+}
+
+// 부모: 자녀 요청 없이 용돈 집안일이나 직접 적은 활동을 바로 지급(적립)한다.
+// 그날 봉사 몫이 남아 있으면 용돈 집안일은 봉사 1회로 처리된다 (승인할 때와 같음).
+function InstantModal({ fid, child, chores, requests, onClose }) {
+  const paid = chores.filter((c) => choreKind(c) === 'paid' && !c.hidden && targetsChild(c, child.id));
+  const [pick, setPick] = useState(null); // 집안일 id 또는 'custom'
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const chore = paid.find((c) => c.id === pick);
+  const asService = chore && serviceToday(child, []).state === 'todo';
+
+  const submit = async () => {
+    if (!pick) return toast('무엇을 지급할지 골라 주세요.');
+    const input = chore ? { chore } : { name, amount: Number(amount) };
+    const msg = asService ? `${child.name}: 봉사 1회로 기록했어요.`
+      : `${child.name}에게 ${won(chore ? priceFor(chore, child.id) : Number(amount))} 적립했어요.`;
+    if (await run(() => store.addRecord(fid, child.id, (m) => instantRecord(m, input)), msg)) onClose();
+  };
+
+  return html`
+    <${Modal} title=${`${child.name} 바로 지급`} onClose=${onClose}>
+      <p class="muted">아이가 요청하지 않아도 부모가 바로 적립해요. 현재 잔액 <b>${won(child.balance)}</b></p>
+      ${child.serviceRemaining > 0 && html`<${ServiceStatus} member=${child} requests=${requests} />`}
+      <div class="card list instant-list">
+        ${paid.map((c) => html`
+          <button class=${`row-item plain block-row ${pick === c.id ? 'picked' : ''}`} key=${c.id} onClick=${() => setPick(c.id)}>
+            <span class="emoji small">${c.emoji}</span>
+            <div class="grow title">${c.name}</div>
+            <span class="price">${won(priceFor(c, child.id))}</span>
+          </button>`)}
+        <button class=${`row-item plain block-row ${pick === 'custom' ? 'picked' : ''}`} onClick=${() => setPick('custom')}>
+          <span class="emoji small">⭐</span>
+          <div class="grow title">직접 적기 (목록에 없는 활동)</div>
+        </button>
+      </div>
+      ${pick === 'custom' && html`
+        <label class="field">활동 이름
+          <input maxlength="30" placeholder="예: 할머니 댁 짐 옮기기" value=${name} onInput=${(e) => setName(e.target.value)} />
+        </label>
+        <label class="field">금액 (원)
+          <input type="number" inputmode="numeric" min="1" step="100" value=${amount} onInput=${(e) => setAmount(e.target.value)} />
+        </label>`}
+      ${asService && html`<p class="hint service-hint">🤝 오늘 해야 할 집안일 봉사가 남아 있어서 이 집안일은 <b>봉사 1회(무급)</b>로 기록돼요.</p>`}
+      <button class="btn primary block" disabled=${!pick} onClick=${submit}>
+        ${asService ? '봉사 1회로 기록' : '바로 지급'}
+      </button>
+    <//>`;
 }
 
 function PenaltyModal({ fid, child, onClose }) {
@@ -1117,10 +1242,12 @@ function SettingsModal({ fid, settings, onClose }) {
       streakDays: Number(f.streakDays),
       streakBonus: Number(f.streakBonus),
       violencePerCase: Number(f.violencePerCase),
+      phonePerHour: Number(f.phonePerHour),
     };
     if (!Number.isInteger(next.streakDays) || next.streakDays < 2 || next.streakDays > 60) return toast('연속 일수는 2~60일로 정해 주세요.');
     if (!Number.isInteger(next.streakBonus) || next.streakBonus < 10) return toast('보너스는 10원 이상으로 정해 주세요.');
     if (!Number.isInteger(next.violencePerCase) || next.violencePerCase < 1 || next.violencePerCase > 20) return toast('1건당 하루 봉사 횟수는 1~20회로 정해 주세요.');
+    if (!Number.isInteger(next.phonePerHour) || next.phonePerHour < 10 || next.phonePerHour > 100000) return toast('핸드폰 차감 금액은 10원~100,000원으로 정해 주세요.');
     if (await run(() => store.updateFamily(fid, { settings: next }), '규칙을 저장했어요.')) onClose();
   };
   return html`
@@ -1133,6 +1260,10 @@ function SettingsModal({ fid, settings, onClose }) {
       </label>
       <label class="field">중대 사안 1건당 하루 집안일 봉사 횟수 (기한까지 매일)
         <input type="number" inputmode="numeric" min="1" value=${f.violencePerCase} onInput=${(e) => set('violencePerCase', e.target.value)} />
+      </label>
+      <label class="field">핸드폰 사용 1시간마다 차감할 금액 (원)
+        <input type="number" inputmode="numeric" min="10" step="100" value=${f.phonePerHour} onInput=${(e) => set('phonePerHour', e.target.value)} />
+        <span class="service-calc">예: 90분이면 ${won(phoneAmount(90, Number(f.phonePerHour) || 0))}, 97분이면 ${won(phoneAmount(97, Number(f.phonePerHour) || 0))}</span>
       </label>
       <p class="hint">그날의 '오늘의 기본 할 일'을 모두 체크하면 연속 일수가 1 늘어요. 하나라도 빠진 날이 있으면 0부터 다시 시작해요. 기본 할 일이 없는 요일은 세지 않고 넘어가요.</p>
       <button class="btn primary block" onClick=${save}>저장</button>
@@ -1149,12 +1280,18 @@ function RulesTab({ fid, family, members, requests, me }) {
   const [applying, setApplying] = useState(null); // 규칙 또는 'major'
   const [editing, setEditing] = useState(null);   // 규칙 또는 {} (새 규칙)
   const [editNote, setEditNote] = useState(false);
+  const [view, setView] = useState('house'); // house(우리 집 규칙) / promise(약속과 벌칙)
   const records = requests
     .filter((r) => r.type === 'penalty' || (r.type === 'service' && r.count > 0))
     .filter((r) => isParent || r.childId === me.id)
     .slice(0, 10);
 
   return html`
+    <div class="seg">
+      <button class=${view === 'house' ? 'on' : ''} onClick=${() => setView('house')}>📖 우리 집 규칙</button>
+      <button class=${view === 'promise' ? 'on' : ''} onClick=${() => setView('promise')}>⚖️ 약속과 벌칙</button>
+    </div>
+    ${view === 'house' ? html`<${HouseRules} fid=${fid} family=${family} isParent=${isParent} />` : html`
     <div class="section-head">
       <h2 class="section">📜 우리 집 생활 약속</h2>
       ${isParent && html`<button class="btn small ghost" onClick=${() => setEditNote(true)}>안내 수정</button>`}
@@ -1199,6 +1336,18 @@ function RulesTab({ fid, family, members, requests, me }) {
           <div class="rule-actions"><button class="btn small" onClick=${() => setApplying('major')}>적용</button></div>`}
       </div>
     </div>
+    <div class="card rule">
+      <div class="row-item">
+        <span class="emoji">📱</span>
+        <div class="grow">
+          <div class="title">핸드폰 사용 시간</div>
+          <div class="muted small">그날 쓴 시간을 적으면 분 단위로 계산해서 용돈에서 빠져요.</div>
+        </div>
+      </div>
+      <div class="rule-foot">
+        <span class="tag rule-money">📱 1시간에 ${won(settings.phonePerHour)} 차감</span>
+      </div>
+    </div>
 
     <h2 class="section">약속을 지키면</h2>
     <div class="card list">
@@ -1223,12 +1372,74 @@ function RulesTab({ fid, family, members, requests, me }) {
             </div>
             <${Amount} r=${r} />
           </div>`)}
-      </div>`}
+      </div>`}`}
 
     ${applying && html`
       <${RuleApplyModal} fid=${fid} rule=${applying} members=${members} settings=${settings} onClose=${() => setApplying(null)} />`}
     ${editing && html`<${RuleEditModal} fid=${fid} family=${family} rule=${editing} onClose=${() => setEditing(null)} />`}
     ${editNote && html`<${RulesNoteModal} fid=${fid} family=${family} onClose=${() => setEditNote(false)} />`}`;
+}
+
+// 우리 집 규칙: 가족이 함께 정한 규칙을 읽어 보는 목록. 부모만 추가·수정·삭제·순서 바꾸기를 할 수 있다.
+function HouseRules({ fid, family, isParent }) {
+  const rules = houseRulesOf(family);
+  const [editing, setEditing] = useState(null); // 규칙 또는 {} (새 규칙)
+  const move = (i, dir) => {
+    const next = [...rules];
+    [next[i], next[i + dir]] = [next[i + dir], next[i]];
+    run(() => store.updateFamily(fid, { houseRules: next }));
+  };
+  return html`
+    <div class="section-head">
+      <h2 class="section">📖 우리 집 규칙</h2>
+      ${isParent && html`<button class="btn primary small" onClick=${() => setEditing({})}>+ 규칙 추가</button>`}
+    </div>
+    ${!rules.length && html`<${Empty} icon="📖"
+      text=${isParent ? '아직 규칙이 없어요. + 규칙 추가를 눌러 우리 집 규칙을 적어 보세요.' : '아직 등록된 규칙이 없어요.'} />`}
+    ${rules.map((rule, i) => html`
+      <div class="card chore-row house-rule" key=${rule.id}>
+        <button class="row-item grow plain" disabled=${!isParent} onClick=${() => setEditing(rule)}
+          aria-label=${isParent ? `${rule.text} 수정` : rule.text}>
+          <span class="house-num">${i + 1}</span>
+          <span class="emoji small">${rule.emoji || '📌'}</span>
+          <div class="grow house-text">${rule.text}</div>
+        </button>
+        ${isParent && html`
+          <div class="order-btns">
+            <button class="icon-btn" disabled=${i === 0} onClick=${() => move(i, -1)} aria-label="위로">▲</button>
+            <button class="icon-btn" disabled=${i === rules.length - 1} onClick=${() => move(i, 1)} aria-label="아래로">▼</button>
+          </div>`}
+      </div>`)}
+    ${isParent && rules.length > 0 && html`<p class="hint">규칙을 누르면 고치거나 지울 수 있어요. 아이들은 읽기만 할 수 있어요.</p>`}
+    ${editing && html`<${HouseRuleModal} fid=${fid} family=${family} rule=${editing} onClose=${() => setEditing(null)} />`}`;
+}
+
+function HouseRuleModal({ fid, family, rule, onClose }) {
+  const isNew = !rule.id;
+  const [emoji, setEmoji] = useState(rule.emoji || '📌');
+  const [text, setText] = useState(rule.text || '');
+  const saveRules = (next, msg) => run(() => store.updateFamily(fid, { houseRules: next }), msg);
+  const save = async () => {
+    if (!text.trim()) return toast('규칙 내용을 입력해 주세요.');
+    const item = { id: rule.id || `h-${Math.random().toString(36).slice(2, 9)}`, emoji: emoji || '📌', text: text.trim() };
+    const list = houseRulesOf(family);
+    const next = isNew ? [...list, item] : list.map((r) => (r.id === rule.id ? item : r));
+    if (await saveRules(next, isNew ? '규칙을 추가했어요.' : '저장했어요.')) onClose();
+  };
+  const remove = async () => {
+    if (!confirm('이 규칙을 지울까요?')) return;
+    if (await saveRules(houseRulesOf(family).filter((r) => r.id !== rule.id), '규칙을 지웠어요.')) onClose();
+  };
+  return html`
+    <${Modal} title=${isNew ? '우리 집 규칙 추가' : '우리 집 규칙 수정'} onClose=${onClose}>
+      <div class="field">아이콘<${EmojiPicker} value=${emoji} onPick=${setEmoji} /></div>
+      <label class="field">규칙 내용
+        <textarea rows="3" maxlength="200" placeholder="예: 밥 먹기 전에는 꼭 손을 씻어요." value=${text}
+          onInput=${(e) => setText(e.target.value)}></textarea>
+      </label>
+      <button class="btn primary block" onClick=${save}>저장</button>
+      ${!isNew && html`<button class="btn danger-ghost block" onClick=${remove}>규칙 지우기</button>`}
+    <//>`;
 }
 
 // 규칙을 자녀에게 적용 (차감 / 집안일 봉사 / 중대 사안). 자녀 한 명 또는 모두에게 한 번에.
@@ -1420,6 +1631,7 @@ function HistoryTab({ requests, members, onlyChild }) {
   const repaidInPayout = payouts.reduce((s, r) => s + (r.repaid || 0), 0);
   const paid = sum(payouts) - repaidInPayout; // 실제로 건넨 돈
   const penalty = sum(list.filter((r) => r.type === 'penalty'));
+  const phone = list.filter((r) => r.type === 'phone' && r.status === 'approved');
   const advance = sum(list.filter((r) => r.type === 'advance'));
   const repaid = sum(list.filter((r) => r.type === 'repay')) + repaidInPayout;
 
@@ -1462,6 +1674,7 @@ function HistoryTab({ requests, members, onlyChild }) {
       <div class="stat"><div class="muted small">지급</div><div class="minus">${won(paid)}</div></div>
     </div>
     ${penalty > 0 && html`<p class="hint">이 달 차감 ${won(penalty)}</p>`}
+    ${phone.length > 0 && html`<p class="hint">📱 이 달 핸드폰 ${fmtMinutes(phone.reduce((n, r) => n + (r.minutes || 0), 0))} 사용 · ${won(sum(phone))} 차감</p>`}
     ${(advance > 0 || repaid > 0) && html`<p class="hint">이 달 가불 ${won(advance)} · 상환 ${won(repaid)}</p>`}
 
     ${top.length > 0 && html`
@@ -1718,6 +1931,8 @@ function ChildHome({ fid, me, chores, requests, family }) {
   const pendingEarn = sum(pending.filter((r) => ['chore', 'bonus', 'custom'].includes(r.type)));
   const weekEarn = mine.filter((r) => r.createdAt >= startOfWeek()).reduce((s, r) => s + earnedAmount(r), 0);
   const pendingPay = pendingPayoutSum(requests, me.id);
+  const pendingPhone = sum(pending.filter((r) => r.type === 'phone'));
+  const [phoneOpen, setPhoneOpen] = useState(false);
   const debt = me.debt || 0;
   const advances = openAdvances(requests, me.id, debt);
 
@@ -1731,11 +1946,12 @@ function ChildHome({ fid, me, chores, requests, family }) {
     return !r || r.childId === me.id;
   });
   const dutyDoneToday = (c) => mine.find((r) => r.type === 'duty' && r.choreId === c.id && r.createdAt >= startOfDay());
-  const dutyDone = duties.filter(dutyDoneToday).length;
+  const dutyDone = duties.filter((c) => dutyDoneToday(c)?.status === 'approved').length;
 
-  // 기본 할 일은 승인 없이 체크/해제한다.
+  // 기본 할 일은 승인 없이 체크/해제한다. 부모가 '안 함'으로 바꾼 일은 다시 체크할 수 없다.
   const toggleDuty = (c) => {
     const r = dutyDoneToday(c);
+    if (r?.status === 'rejected') return toast('부모님이 오늘은 안 한 것으로 바꿨어요.');
     if (r) return run(() => store.cancelRequest(fid, r.id));
     return run(() => store.createRequest(fid, {
       type: 'duty', childId: me.id, childName: me.name, choreId: c.id, choreName: c.name,
@@ -1762,7 +1978,7 @@ function ChildHome({ fid, me, chores, requests, family }) {
       </div>
       ${debt > 0 && html`<div class="balance-debt">
         ${advances.map((r) => html`<div class="balance-debt-row" key=${r.id}>
-          <span>${fmtDate(r.createdAt)} · ${r.reason}</span><b>-${won(r.amount)}</b>
+          <span>${fmtDate(r.phoneDay || r.createdAt)} · ${debtLabel(r)}</span><b>-${won(debtPart(r))}</b>
         </div>`)}
         <div>용돈을 받을 때 10%씩 자동으로 갚아요.</div>
       </div>`}
@@ -1770,6 +1986,7 @@ function ChildHome({ fid, me, chores, requests, family }) {
         <span>이번 주 +${won(weekEarn)}</span>
         ${pendingEarn > 0 && html`<span>승인 대기 +${won(pendingEarn)}</span>`}
         ${pendingPay > 0 && html`<span>지급 요청 중 ${won(pendingPay)}</span>`}
+        ${pendingPhone > 0 && html`<span>차감 대기 -${won(pendingPhone)}</span>`}
       </div>
       <button class="btn light block" onClick=${() => setPayout(true)}>용돈 지급 요청</button>
     </div>
@@ -1783,20 +2000,26 @@ function ChildHome({ fid, me, chores, requests, family }) {
       </div>
       <div class="card list duty-card">
         ${duties.map((c) => {
-          const done = !!dutyDoneToday(c);
+          const r = dutyDoneToday(c);
+          const done = r?.status === 'approved';
+          const refused = r?.status === 'rejected';
           return html`
-            <button class=${`row-item plain duty ${done ? 'done' : ''}`} onClick=${() => toggleDuty(c)} key=${c.id}
+            <button class=${`row-item plain duty ${done ? 'done' : ''} ${refused ? 'refused' : ''}`} onClick=${() => toggleDuty(c)} key=${c.id}
               aria-pressed=${done}>
-              <span class="check">${done ? '✓' : ''}</span>
+              <span class="check">${done ? '✓' : refused ? '✕' : ''}</span>
               <span class="emoji small">${c.emoji}</span>
               <div class="grow">
                 <div class="title">${c.name}</div>
-                ${c.desc && html`<div class="muted small">${c.desc}</div>`}
+                ${refused ? html`<div class="small error">부모님이 안 한 것으로 바꿨어요</div>`
+                  : c.desc && html`<div class="muted small">${c.desc}</div>`}
               </div>
             </button>`;
         })}
         <${StreakCard} fid=${fid} me=${me} chores=${chores} requests=${requests} settings=${settings} />
       </div>`}
+
+    <h2 class="section">핸드폰 사용 시간</h2>
+    <${PhoneCard} me=${me} requests=${requests} settings=${settings} onOpen=${() => setPhoneOpen(true)} />
 
     ${(serving || missions.length > 0) && html`
       <h2 class="section">특별 미션</h2>
@@ -1863,7 +2086,86 @@ function ChildHome({ fid, me, chores, requests, family }) {
     ${doing && html`<${DoneModal} fid=${fid} me=${me} chore=${doing} requests=${requests} onClose=${() => setDoing(null)} />`}
     ${payout && html`<${PayoutModal} fid=${fid} me=${me} requests=${requests} onClose=${() => setPayout(false)} />`}
     ${custom && html`<${CustomModal} fid=${fid} me=${me} onClose=${() => setCustom(false)} />`}
-    ${goalEdit && html`<${GoalModal} fid=${fid} me=${me} onClose=${() => setGoalEdit(false)} />`}`;
+    ${goalEdit && html`<${GoalModal} fid=${fid} me=${me} onClose=${() => setGoalEdit(false)} />`}
+    ${phoneOpen && html`
+      <${PhoneModal} fid=${fid} child=${me} requests=${requests} settings=${settings} onClose=${() => setPhoneOpen(false)} />`}`;
+}
+
+// 자녀 홈: 오늘 핸드폰 사용 시간을 적었는지 보여 주고, 누르면 입력 창을 연다.
+function PhoneCard({ me, requests, settings, onOpen }) {
+  const r = phoneRecordOn(requests, me.id, startOfDay());
+  return html`
+    <button class="card goal-empty" onClick=${onOpen}>
+      <span class="emoji">📱</span>
+      <div class="grow">
+        <div class="title">${r ? `오늘 ${fmtMinutes(r.minutes)} 사용 · -${won(r.amount)}` : '오늘 사용한 시간 적기'}</div>
+        <div class="muted small">${r
+          ? (r.status === 'pending' ? '부모님 확인 기다리는 중' : '용돈에서 차감했어요')
+          : `1시간에 ${won(settings.phonePerHour)}씩 용돈에서 빠져요`}</div>
+      </div>
+      <span class="muted">›</span>
+    </button>`;
+}
+
+// 핸드폰 사용 시간 입력. 자녀는 요청(부모 승인 후 차감), 부모는 바로 차감한다.
+// 하루에 한 번만 적을 수 있다 (반려되면 다시 적을 수 있다).
+function PhoneModal({ fid, child, requests, settings, asParent = false, onClose }) {
+  const today = startOfDay();
+  const yesterday = startOfDay(today - 1);
+  const [day, setDay] = useState(today);
+  const [hours, setHours] = useState('');
+  const [mins, setMins] = useState('');
+  const minutes = (Number(hours) || 0) * 60 + (Number(mins) || 0);
+  const rate = settings.phonePerHour;
+  const amount = phoneAmount(minutes, rate);
+  const { fromBalance, toDebt } = phoneSplit(child, amount);
+  const already = phoneRecordOn(requests, child.id, day);
+  const badInput = [hours, mins].some((v) => v !== '' && !(Number.isInteger(Number(v)) && Number(v) >= 0));
+  const error = already ? `${fmtDate(day)}은 이미 ${fmtMinutes(already.minutes)}을 적었어요.`
+    : badInput ? '숫자로 입력해 주세요.' : minutes > 0 ? checkPhone(minutes) : null;
+
+  const submit = async () => {
+    const problem = error || checkPhone(minutes);
+    if (problem) return toast(problem);
+    const ok = await run(() => (asParent
+      ? store.addRecord(fid, child.id, (m) => phoneRecord(m, minutes, day, rate))
+      : store.createRequest(fid, {
+        type: 'phone', childId: child.id, childName: child.name, emoji: '📱',
+        minutes, phoneDay: day, amount, memo: '',
+      })), asParent ? `${won(amount)} 차감했어요.` : '부모님께 보냈어요. 확인하면 용돈에서 빠져요.');
+    if (ok) onClose();
+  };
+
+  return html`
+    <${Modal} title=${asParent ? `${child.name} 핸드폰 사용 시간` : '핸드폰 사용 시간'} onClose=${onClose}>
+      <p class="muted">1시간에 <b>${won(rate)}</b>씩 용돈에서 빠져요. 분 단위로 계산해요.</p>
+      <div class="seg small">
+        <button class=${day === today ? 'on' : ''} onClick=${() => setDay(today)}>오늘</button>
+        <button class=${day === yesterday ? 'on' : ''} onClick=${() => setDay(yesterday)}>어제</button>
+      </div>
+      <div class="two-col">
+        <label class="field">시간
+          <input type="number" inputmode="numeric" min="0" max="24" step="1" placeholder="0" value=${hours}
+            onInput=${(e) => setHours(e.target.value)} />
+        </label>
+        <label class="field">분
+          <input type="number" inputmode="numeric" min="0" step="1" placeholder="0" value=${mins}
+            onInput=${(e) => setMins(e.target.value)} />
+        </label>
+      </div>
+      ${minutes > 0 && !error && html`
+        <div class="pay-calc">
+          <div><span>사용 시간</span><span>${fmtMinutes(minutes)} (${minutes}분)</span></div>
+          <div><span>차감 기준</span><span>1시간에 ${won(rate)}</span></div>
+          <div class="total"><span>용돈에서 차감</span><span class="minus">-${won(amount)}</span></div>
+        </div>
+        ${toDebt > 0 && html`
+          <p class="hint error">모은 용돈이 ${won(child.balance)}뿐이라 ${won(fromBalance)}만 빠지고, 모자란 ${won(toDebt)}은 마이너스 용돈이 돼요.</p>`}`}
+      ${error && html`<p class="error">${error}</p>`}
+      <button class="btn primary block" disabled=${!!error || minutes <= 0} onClick=${submit}>
+        ${asParent ? '차감하기' : '부모님께 보내기'}
+      </button>
+    <//>`;
 }
 
 function DoneModal({ fid, me, chore, requests, onClose }) {

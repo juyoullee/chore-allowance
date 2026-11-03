@@ -2,6 +2,7 @@
 // 탭마다 다른 사람으로 로그인할 수 있어서, 탭 두 개로 부모와 자녀 흐름을 함께 확인할 수 있다.
 import {
   DEFAULT_CHORES, newChore, approvalEffect, initialStatus, choreKind, isOverdue, settingsOf, priceFor, checkCustom,
+  checkPhone, phoneAmount,
 } from '../logic.js';
 
 const KEY = 'chore-demo-v1';
@@ -182,6 +183,10 @@ export default {
     } else if (req.type === 'custom') {
       const error = checkCustom(req.choreName, req.amount, req.memo);
       if (error) throw new Error(error);
+    } else if (req.type === 'phone') {
+      const error = checkPhone(req.minutes);
+      if (error) throw new Error(error);
+      if (req.amount !== phoneAmount(req.minutes, settingsOf(f).phonePerHour)) throw new Error('차감 기준이 바뀌었어요. 다시 시도해 주세요.');
     } else if (req.type !== 'payout') {
       const chore = f.chores[req.choreId];
       const kind = chore && choreKind(chore);
@@ -193,6 +198,10 @@ export default {
     }
     const id = newId();
     f.requests[id] = { id, ...req, status: initialStatus(req.type), createdAt: Date.now() };
+    save();
+  },
+  async updateRequest(fid, id, patch) {
+    Object.assign(fam(fid).requests[id], patch);
     save();
   },
   async cancelRequest(fid, id) {
@@ -210,9 +219,10 @@ export default {
       Object.assign(req, decided, { status: 'rejected', reason });
     } else {
       const member = f.members[req.childId];
-      const { serviceUsed, repaid, ...memberPatch } = approvalEffect(req, member);
+      const { serviceUsed, repaid, toDebt, ...memberPatch } = approvalEffect(req, member);
       Object.assign(member, memberPatch);
-      Object.assign(req, decided, { status: 'approved', balanceAfter: memberPatch.balance, serviceUsed, repaid });
+      Object.assign(req, decided, { status: 'approved', balanceAfter: memberPatch.balance, serviceUsed, repaid },
+        toDebt ? { toDebt } : {});
       const chore = f.chores[req.choreId];
       if (req.choreKind === 'mission' && chore) Object.assign(chore, { done: true, doneBy: req.childId, doneAt: Date.now() });
     }

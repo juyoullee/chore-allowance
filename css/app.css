@@ -303,6 +303,7 @@ button.card:disabled { opacity: .55; cursor: default; }
 .pay-calc .minus { color: #dc2626; }
 .pay-calc .total { font-weight: 800; font-size: 16px; }
 .balance-debt-row { display: flex; justify-content: space-between; gap: 8px; }
+.balance-debt-row b { white-space: nowrap; }
 .advance-row { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
 .money-pair { display: flex; gap: 14px; text-align: right; flex-shrink: 0; }
 .price.debt { color: #dc2626; }
@@ -397,3 +398,13 @@ button.card:disabled { opacity: .55; cursor: default; }
   z-index: 30; background: #1f2937; color: #fff; padding: 10px 18px; border-radius: 12px;
   font-size: 14px; max-width: calc(100% - 32px); text-align: center; box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
 }
+.actions.one { grid-template-columns: 1fr; margin-top: 8px; }
+.house-rule .row-item:disabled { opacity: 1; cursor: default; }
+.house-num { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); font-weight: 800; font-size: 13px; display: grid; place-items: center; }
+.house-text { font-size: 15px; line-height: 1.5; white-space: pre-line; text-align: left; }
+.block-row { width: 100%; }
+.block-row:disabled { opacity: 1; cursor: default; }
+.instant-list .row-item.picked { background: var(--primary-soft); border-radius: 10px; }
+.instant-list { max-height: 45vh; overflow-y: auto; margin: 8px 0; }
+.duty.refused .title { text-decoration: line-through; color: var(--muted); }
+.duty.refused .check { border-color: var(--minus); color: var(--minus); }

@@ -282,6 +282,8 @@ export default {
     ...data, status: initialStatus(data.type), createdAt: serverTimestamp(),
   }),
   cancelRequest: (fid, id) => deleteDoc(famRef(fid, 'requests', id)),
+  // 부모가 기록 상태를 바꾼다 (예: 체크한 기본 할 일을 '안 함'으로).
+  updateRequest: (fid, id, patch) => updateDoc(famRef(fid, 'requests', id), patch),
 
   async decide(fid, reqId, approve, reason = '') {
     const uid = A().currentUser.uid;
@@ -299,9 +301,11 @@ export default {
       }
       const mRef = famRef(fid, 'members', req.childId);
       const mSnap = await tx.get(mRef);
-      const { serviceUsed, repaid, ...memberPatch } = approvalEffect(req, mSnap.data());
+      const { serviceUsed, repaid, toDebt, ...memberPatch } = approvalEffect(req, mSnap.data());
       tx.update(mRef, memberPatch);
-      tx.update(rRef, { ...decided, status: 'approved', balanceAfter: memberPatch.balance, serviceUsed, repaid });
+      tx.update(rRef, {
+        ...decided, status: 'approved', balanceAfter: memberPatch.balance, serviceUsed, repaid, ...(toDebt ? { toDebt } : {}),
+      });
       // 특별 미션은 한 번 승인되면 끝난다.
       if (req.choreKind === 'mission') {
         tx.update(famRef(fid, 'chores', req.choreId), { done: true, doneBy: req.childId, doneAt: serverTimestamp() });

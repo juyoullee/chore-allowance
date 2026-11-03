@@ -5,6 +5,7 @@ rules_version = '2';
 // - 집안일 항목·가격 변경, 승인/반려, 잔액 변경은 부모만 할 수 있다.
 // - 자녀는 자기 이름으로만 요청을 만들 수 있고, 금액은 현재 가격/잔액을 넘을 수 없다.
 //   (특별 활동은 자녀가 금액을 직접 적되 10만원까지, 부모 승인 후 적립)
+//   (핸드폰 사용 시간은 자녀가 적고 부모 승인 후 차감)
 // - 자녀는 자기 저축 목표(goal)와 이름만 바꿀 수 있다.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -64,6 +65,16 @@ service cloud.firestore {
         && r.streakKey is int;
     }
 
+    // 핸드폰 사용 시간 차감 요청: 사용한 분(1~1440)과 그에 맞는 금액(1시간에 설정 금액, 1원 단위 반올림)
+    function validPhoneRequest(fid) {
+      let r = request.resource.data;
+      let rate = get(/databases/$(database)/documents/families/$(fid)).data.get('settings', {}).get('phonePerHour', 1000);
+      return r.type == 'phone' && r.status == 'pending'
+        && r.minutes is int && r.minutes > 0 && r.minutes <= 1440
+        && r.phoneDay is int
+        && r.amount > 0 && r.amount * 60 >= r.minutes * rate - 30 && r.amount * 60 <= r.minutes * rate + 30;
+    }
+
     match /users/{userId} {
       allow read, write: if signedIn() && uid() == userId;
     }
@@ -106,9 +117,10 @@ service cloud.firestore {
             && ((request.resource.data.type == 'payout' && validPayoutRequest(fid))
               || (request.resource.data.type == 'bonus' && validBonusRequest(fid))
               || (request.resource.data.type == 'custom' && validCustomRequest())
+              || (request.resource.data.type == 'phone' && validPhoneRequest(fid))
               || (request.resource.data.type in ['chore', 'duty'] && validChoreRequest(fid))))
-          // 부모는 차감·봉사 의무·가불·상환 기록을 직접 남긴다.
-          || (isParent(fid) && request.resource.data.type in ['penalty', 'service', 'advance', 'repay']
+          // 부모는 차감·봉사 의무·가불·상환·핸드폰 사용 기록과 바로 지급(집안일·특별 활동)을 직접 남긴다.
+          || (isParent(fid) && request.resource.data.type in ['penalty', 'service', 'advance', 'repay', 'phone', 'chore', 'custom']
               && request.resource.data.status == 'approved');
         allow update: if isParent(fid);
         // 자녀는 대기 중인 요청을 취소하거나, 체크한 기본 할 일을 해제할 수 있다.

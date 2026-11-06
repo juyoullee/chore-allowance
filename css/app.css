@@ -405,3 +405,5 @@ button.card:disabled { opacity: .55; cursor: default; }
 .instant-list { max-height: 45vh; overflow-y: auto; margin: 8px 0; }
 .duty.refused .title { text-decoration: line-through; color: var(--muted); }
 .duty.refused .check { border-color: var(--minus); color: var(--minus); }
+.day-picker { align-items: center; }
+.day-picker input[type="date"] { width: auto; flex: 1; min-width: 140px; padding: 6px 10px; }

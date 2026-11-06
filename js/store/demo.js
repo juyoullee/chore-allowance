@@ -135,7 +135,7 @@ export default {
     save();
   },
 
-  async addRecord(fid, childId, make) {
+  async addRecord(fid, childId, make, at) {
     const f = fam(fid);
     const member = f.members[childId];
     const { patch, record } = make(structuredClone(member));
@@ -144,7 +144,7 @@ export default {
     const now = Date.now();
     f.requests[id] = {
       id, ...record, childId, childName: member.name, status: 'approved',
-      createdAt: now, decidedAt: now, decidedBy: currentUser()?.uid,
+      createdAt: at ?? now, decidedAt: now, decidedBy: currentUser()?.uid,
     };
     save();
   },

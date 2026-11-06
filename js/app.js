@@ -12,7 +12,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v21 (11/3)';
+const APP_VERSION = 'v22 (11/6)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -475,26 +475,53 @@ function DutyStatus({ fid, chores, members, requests }) {
     ${child && html`<${DutyCheckModal} fid=${fid} child=${child} chores=${chores} requests=${requests} onClose=${() => setChecking(null)} />`}`;
 }
 
-// 부모: 자녀가 체크한 기본 할 일을 그날 '안 함'으로 바꾸거나 되돌린다 (오늘·어제).
-// '안 함'으로 바꾸면 연속 달성에서도 빠지고, 자녀는 그날 다시 체크할 수 없다.
-function DutyCheckModal({ fid, child, chores, requests, onClose }) {
+// 지난 기록을 남길 날짜 고르기: 오늘·어제·그저께 버튼 + 날짜 칸 (최근 30일까지)
+const PAST_DAYS = 30;
+function DayPicker({ day, onDay }) {
   const today = startOfDay();
   const yesterday = startOfDay(today - 1);
-  const [day, setDay] = useState(today);
+  const quick = [['오늘', today], ['어제', yesterday], ['그저께', startOfDay(yesterday - 1)]];
+  const pick = (s) => {
+    const t = s && startOfDay(dateInputToDue(s));
+    if (t && t <= today && t >= startOfDay(today - PAST_DAYS * 86400000)) onDay(t);
+  };
+  return html`
+    <div class="field">날짜
+      <div class="chips day-picker">
+        ${quick.map(([label, t]) => html`
+          <button class=${`chip ${day === t ? 'on' : ''}`} onClick=${() => onDay(t)}>${label}</button>`)}
+        <input type="date" value=${dueToDateInput(day)} max=${dueToDateInput(today)}
+          min=${dueToDateInput(today - PAST_DAYS * 86400000)} onInput=${(e) => pick(e.target.value)} />
+      </div>
+    </div>`;
+}
+
+// 지난 날에 한 일로 남길 때의 기록 시각 (그날 낮 12시). 오늘이면 지금 시각을 쓴다.
+const recordAt = (day) => (day === startOfDay() ? undefined : day + 12 * 3600000);
+
+// 부모: 기본 할 일을 날짜별로 확인한다 (최근 30일).
+// - 아이가 잊고 체크하지 않은 일은 '했음'으로 등록한다 → 연속 달성이 이어진다.
+// - 하지 않았는데 체크한 일은 '안 함'으로 바꾼다 → 연속 달성에서 빠지고, 자녀는 그날 다시 체크할 수 없다.
+function DutyCheckModal({ fid, child, chores, requests, onClose }) {
+  const [day, setDay] = useState(startOfDay());
   const duties = dutiesOn(chores, child.id, day);
   const recordOf = (c) => requests.find((r) => r.type === 'duty' && r.childId === child.id && r.choreId === c.id
     && startOfDay(r.createdAt) === day);
   const refuse = (r) => run(() => store.updateRequest(fid, r.id, { status: 'rejected', reason: '부모 확인: 하지 않음' }),
     '안 한 것으로 바꿨어요.');
   const restore = (r) => run(() => store.updateRequest(fid, r.id, { status: 'approved', reason: '' }), '한 것으로 되돌렸어요.');
+  const markDone = (c) => run(() => store.addRecord(fid, child.id, () => ({
+    patch: {},
+    record: {
+      type: 'duty', choreId: c.id, choreName: c.name, choreKind: 'duty', emoji: c.emoji, amount: 0, memo: '', byParent: true,
+    },
+  }), recordAt(day)), `${fmtDate(day)} 한 것으로 등록했어요.`);
 
   return html`
     <${Modal} title=${`${child.name} 기본 할 일 확인`} onClose=${onClose}>
-      <div class="seg small">
-        <button class=${day === today ? 'on' : ''} onClick=${() => setDay(today)}>오늘</button>
-        <button class=${day === yesterday ? 'on' : ''} onClick=${() => setDay(yesterday)}>어제</button>
-      </div>
-      <p class="hint">하지 않았는데 체크했다면 '안 함'으로 바꾸세요. 그날은 한 것으로 치지 않고, 연속 달성도 끊겨요.</p>
+      <${DayPicker} day=${day} onDay=${setDay} />
+      <p class="hint">아이가 깜빡하고 체크하지 않았으면 <b>했음</b>으로 등록하세요 (연속 달성이 이어져요).
+        하지 않았는데 체크했다면 <b>안 함</b>으로 바꾸세요.</p>
       ${!duties.length && html`<p class="hint">이 날은 기본 할 일이 없어요.</p>`}
       <div class="card list">
         ${duties.map((c) => {
@@ -506,9 +533,14 @@ function DutyCheckModal({ fid, child, chores, requests, onClose }) {
               <div class="grow">
                 <div class="title">${c.name}</div>
                 <div class=${`small ${state === 'refused' ? 'error' : 'muted'}`}>
-                  ${{ none: '체크 안 함', done: `✔ 체크함 ${fmtTime(r?.createdAt)}`, refused: '✕ 부모가 안 함으로 바꿈' }[state]}
+                  ${{
+                    none: '체크 안 함',
+                    done: r?.byParent ? '✔ 부모가 등록함' : `✔ 체크함 ${fmtTime(r?.createdAt)}`,
+                    refused: '✕ 부모가 안 함으로 바꿈',
+                  }[state]}
                 </div>
               </div>
+              ${state === 'none' && html`<button class="btn small" onClick=${() => markDone(c)}>했음</button>`}
               ${state === 'done' && html`<button class="btn small danger-ghost" onClick=${() => refuse(r)}>안 함으로</button>`}
               ${state === 'refused' && html`<button class="btn small ghost" onClick=${() => restore(r)}>되돌리기</button>`}
             </div>`;
@@ -881,6 +913,7 @@ function FamilyTab({ fid, family, members, requests, chores }) {
   const [serviceFor, setServiceFor] = useState(null);
   const [phoneFor, setPhoneFor] = useState(null);
   const [instantFor, setInstantFor] = useState(null);
+  const [dutyFor, setDutyFor] = useState(null);
   const [editSettings, setEditSettings] = useState(false);
   const [renameFamily, setRenameFamily] = useState(false);
 
@@ -925,6 +958,9 @@ function FamilyTab({ fid, family, members, requests, chores }) {
             <button class="btn small" onClick=${() => setInstantFor(c)}>⚡ 바로 지급</button>
             <button class="btn small" onClick=${() => setPhoneFor(c)}>📱 핸드폰 시간 차감</button>
           </div>
+          <div class="actions one">
+            <button class="btn small" onClick=${() => setDutyFor(c)}>✅ 기본 할 일 확인 · 지난 날 등록</button>
+          </div>
           ${openAdvances(requests, c.id, c.debt).map((r) => html`
             <div class="row-item advance-row" key=${r.id}>
               <span class="emoji small">${reqIcon(r)}</span>
@@ -967,6 +1003,9 @@ function FamilyTab({ fid, family, members, requests, chores }) {
     ${phoneFor && html`
       <${PhoneModal} fid=${fid} child=${members.find((m) => m.id === phoneFor.id)} requests=${requests} settings=${settings}
         asParent=${true} onClose=${() => setPhoneFor(null)} />`}
+    ${dutyFor && html`
+      <${DutyCheckModal} fid=${fid} child=${members.find((m) => m.id === dutyFor.id)} chores=${chores} requests=${requests}
+        onClose=${() => setDutyFor(null)} />`}
     ${instantFor && html`
       <${InstantModal} fid=${fid} child=${members.find((m) => m.id === instantFor.id)} chores=${chores} requests=${requests}
         onClose=${() => setInstantFor(null)} />`}
@@ -1013,21 +1052,27 @@ function InstantModal({ fid, child, chores, requests, onClose }) {
   const [pick, setPick] = useState(null); // 집안일 id 또는 'custom'
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
+  const [day, setDay] = useState(startOfDay());
   const chore = paid.find((c) => c.id === pick);
-  const asService = chore && serviceToday(child, []).state === 'todo';
+  // 그날(고른 날짜) 봉사 몫이 남아 있으면 봉사로 처리된다.
+  const asService = chore && !!serviceTarget(child, day);
+  const past = day !== startOfDay();
 
   const submit = async () => {
     if (!pick) return toast('무엇을 지급할지 골라 주세요.');
+    const at = recordAt(day);
     const input = chore ? { chore } : { name, amount: Number(amount) };
-    const msg = asService ? `${child.name}: 봉사 1회로 기록했어요.`
-      : `${child.name}에게 ${won(chore ? priceFor(chore, child.id) : Number(amount))} 적립했어요.`;
-    if (await run(() => store.addRecord(fid, child.id, (m) => instantRecord(m, input)), msg)) onClose();
+    const when = past ? `${fmtDate(day)} 활동으로 ` : '';
+    const msg = asService ? `${child.name}: ${when}봉사 1회로 기록했어요.`
+      : `${child.name}에게 ${when}${won(chore ? priceFor(chore, child.id) : Number(amount))} 적립했어요.`;
+    if (await run(() => store.addRecord(fid, child.id, (m) => instantRecord(m, input, at), at), msg)) onClose();
   };
 
   return html`
     <${Modal} title=${`${child.name} 바로 지급`} onClose=${onClose}>
-      <p class="muted">아이가 요청하지 않아도 부모가 바로 적립해요. 현재 잔액 <b>${won(child.balance)}</b></p>
-      ${child.serviceRemaining > 0 && html`<${ServiceStatus} member=${child} requests=${requests} />`}
+      <p class="muted">아이가 요청하지 않아도 부모가 바로 적립해요. 깜빡하고 못 올린 지난 활동은 날짜를 골라 등록하세요. 현재 잔액 <b>${won(child.balance)}</b></p>
+      <${DayPicker} day=${day} onDay=${setDay} />
+      ${child.serviceRemaining > 0 && !past && html`<${ServiceStatus} member=${child} requests=${requests} />`}
       <div class="card list instant-list">
         ${paid.map((c) => html`
           <button class=${`row-item plain block-row ${pick === c.id ? 'picked' : ''}`} key=${c.id} onClick=${() => setPick(c.id)}>
@@ -1047,7 +1092,7 @@ function InstantModal({ fid, child, chores, requests, onClose }) {
         <label class="field">금액 (원)
           <input type="number" inputmode="numeric" min="1" step="100" value=${amount} onInput=${(e) => setAmount(e.target.value)} />
         </label>`}
-      ${asService && html`<p class="hint service-hint">🤝 오늘 해야 할 집안일 봉사가 남아 있어서 이 집안일은 <b>봉사 1회(무급)</b>로 기록돼요.</p>`}
+      ${asService && html`<p class="hint service-hint">🤝 ${past ? '그날' : '오늘'} 해야 할 집안일 봉사가 남아 있어서 이 집안일은 <b>봉사 1회(무급)</b>로 기록돼요.</p>`}
       <button class="btn primary block" disabled=${!pick} onClick=${submit}>
         ${asService ? '봉사 1회로 기록' : '바로 지급'}
       </button>

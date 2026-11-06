@@ -10,7 +10,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, doc, collection, query, orderBy, limit,
-  onSnapshot, getDoc, setDoc, addDoc, updateDoc, deleteDoc, writeBatch, runTransaction, serverTimestamp,
+  onSnapshot, getDoc, setDoc, addDoc, updateDoc, deleteDoc, writeBatch, runTransaction, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { firebaseConfig } from '../config.js';
 import { DEFAULT_CHORES, newChore, genCode, approvalEffect, initialStatus } from '../logic.js';
@@ -236,7 +236,8 @@ export default {
   updateFamily: (fid, patch) => updateDoc(famRef(fid), patch),
 
   // 부모가 차감·집안일 봉사 같은 기록을 남긴다. make(member)가 { patch, record }를 돌려준다.
-  async addRecord(fid, childId, make) {
+  // at(밀리초)을 주면 그 시각에 한 일로 기록한다 (지난 날 기록).
+  async addRecord(fid, childId, make, at) {
     const uid = A().currentUser.uid;
     const mRef = famRef(fid, 'members', childId);
     const rRef = doc(famCol(fid, 'requests'));
@@ -244,10 +245,10 @@ export default {
       const mSnap = await tx.get(mRef);
       const member = { id: childId, ...mSnap.data() };
       const { patch, record } = make(member);
-      tx.update(mRef, patch);
+      if (Object.keys(patch).length) tx.update(mRef, patch);
       tx.set(rRef, {
         ...record, childId, childName: member.name, status: 'approved',
-        createdAt: serverTimestamp(), decidedAt: serverTimestamp(), decidedBy: uid,
+        createdAt: at ? Timestamp.fromMillis(at) : serverTimestamp(), decidedAt: serverTimestamp(), decidedBy: uid,
       });
     });
   },

@@ -119,8 +119,9 @@ service cloud.firestore {
               || (request.resource.data.type == 'custom' && validCustomRequest())
               || (request.resource.data.type == 'phone' && validPhoneRequest(fid))
               || (request.resource.data.type in ['chore', 'duty'] && validChoreRequest(fid))))
-          // 부모는 차감·봉사 의무·가불·상환·핸드폰 사용 기록과 바로 지급(집안일·특별 활동)을 직접 남긴다.
-          || (isParent(fid) && request.resource.data.type in ['penalty', 'service', 'advance', 'repay', 'phone', 'chore', 'custom']
+          // 부모는 차감·봉사 의무·가불·상환·핸드폰 사용 기록과 바로 지급(집안일·특별 활동),
+          // 자녀가 잊은 기본 할 일(지난 날 포함)을 직접 남긴다.
+          || (isParent(fid) && request.resource.data.type in ['penalty', 'service', 'advance', 'repay', 'phone', 'chore', 'custom', 'duty']
               && request.resource.data.status == 'approved');
         allow update: if isParent(fid);
         // 자녀는 대기 중인 요청을 취소하거나, 체크한 기본 할 일을 해제할 수 있다.

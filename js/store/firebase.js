@@ -5,7 +5,7 @@
 // 다른 사람이 바꿔 들어가지 못하게 계정마다 4자리 PIN(이 기기에만 저장)을 둔다.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
-  getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup,
+  getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, linkWithPopup,
   signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
@@ -157,6 +157,13 @@ export default {
     removeAccount(slot);
     activate(null);
     await signOut(inst(slot).auth);
+  },
+
+  // 지금 계정에 Google 로그인을 붙인다. 이후 다른 기기에서 'Google 계정으로 계속하기'로 같은 계정에 들어올 수 있다.
+  hasGoogle: () => Boolean(A().currentUser?.providerData.some((p) => p.providerId === 'google.com')),
+  async linkGoogle() {
+    const res = await linkWithPopup(A().currentUser, new GoogleAuthProvider());
+    return res.user.providerData.find((p) => p.providerId === 'google.com')?.email || '';
   },
 
   /* 여러 계정 */

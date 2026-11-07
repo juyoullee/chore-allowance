@@ -109,6 +109,8 @@ export default {
   signInEmail: unsupported,
   signUpEmail: unsupported,
   resetPassword: unsupported,
+  hasGoogle: () => false,
+  linkGoogle: unsupported,
   createFamily: unsupported,
   joinFamily: unsupported,
 

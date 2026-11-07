@@ -12,7 +12,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v23 (11/7)';
+const APP_VERSION = 'v24 (11/7)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -283,6 +283,20 @@ function UserMenu({ fid, me, onClose }) {
   const [changingPin, setChangingPin] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const account = store.currentAccount();
+  const [google, setGoogle] = useState(() => store.hasGoogle());
+
+  const linkGoogle = async () => {
+    if (!confirm(`${me.name}의 Google 계정으로 로그인해 주세요.
+
+연결하면 다른 폰에서도 'Google 계정으로 계속하기'로 이 계정에 들어올 수 있어요. 기록과 용돈은 그대로예요.`)) return;
+    let gmail = '';
+    if (await run(async () => { gmail = await store.linkGoogle(); })) {
+      setGoogle(true);
+      alert(`연결했어요! ${gmail}
+
+이제 폰에서 앱을 열고 'Google 계정으로 계속하기'를 눌러 이 Google 계정으로 로그인하면 돼요.`);
+    }
+  };
 
   const logout = () => {
     if (confirm('이 기기에서 로그아웃할까요? 다시 쓰려면 이메일과 비밀번호(또는 Google)로 로그인해야 해요.')) store.signOut();
@@ -302,6 +316,9 @@ function UserMenu({ fid, me, onClose }) {
       <p class="muted small">${account?.email || ''}</p>
       <div class="stack">
         <button class="btn block" onClick=${() => setRenaming(true)}>✏️ 내 이름 바꾸기</button>
+        ${google
+          ? html`<p class="muted small center-text">✅ Google 계정 연결됨 (다른 폰에서 Google로 로그인 가능)</p>`
+          : html`<button class="btn block" onClick=${linkGoogle}>📱 Google 계정 연결 (내 폰에서도 쓰기)</button>`}
         <button class="btn block" onClick=${() => setChangingPin(true)}>🔒 ${account?.hasPin ? 'PIN 바꾸기' : 'PIN 정하기'}</button>
         <button class="btn danger-ghost block" onClick=${logout}>이 기기에서 로그아웃</button>
       </div>

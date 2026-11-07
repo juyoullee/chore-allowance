@@ -12,7 +12,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v25 (11/7)';
+const APP_VERSION = 'v26 (11/7)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -119,6 +119,91 @@ function Amount({ r }) {
   return html`<div class=${`amount ${minus ? 'minus' : 'plus'} ${r.status === 'rejected' ? 'struck' : ''}`}>
     ${minus ? '-' : '+'}${won(r.amount)}
   </div>`;
+}
+
+/* ───────── 홈 화면에 앱 설치 ───────── */
+
+const UA = navigator.userAgent;
+const isIOS = /iPhone|iPad|iPod/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/.test(UA);
+const isKakao = /KAKAOTALK/i.test(UA);
+const isInApp = isKakao || /NAVER|Instagram|FBAN|FBAV|Line\/|DaumApps|; wv\)/i.test(UA);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function useInstallPrompt() {
+  const [prompt, setPrompt] = useState(() => window.__installPrompt);
+  useEffect(() => {
+    const on = () => setPrompt(window.__installPrompt);
+    addEventListener('installable', on);
+    return () => removeEventListener('installable', on);
+  }, []);
+  return prompt;
+}
+
+// 지금 브라우저에서 할 수 있는 설치 방법. 없으면 null
+function installWay(prompt) {
+  if (isStandalone()) return null;
+  if (prompt) return 'prompt';
+  if (isKakao) return 'kakao';
+  if (isAndroid && isInApp) return 'chrome';
+  if (isIOS) return 'ios';
+  return null;
+}
+
+function IosGuide({ onClose }) {
+  return html`
+    <${Modal} title="📲 홈 화면에 앱 추가하기" onClose=${onClose}>
+      <ol class="install-steps">
+        <li><b>사파리</b>로 이 페이지를 열어 주세요.</li>
+        <li>화면 아래(또는 위)의 <b>공유 버튼</b> <span class="share-icon">⬆️</span> 을 눌러요.</li>
+        <li>목록을 내려서 <b>'홈 화면에 추가'</b>를 눌러요.</li>
+        <li>오른쪽 위 <b>'추가'</b>를 누르면 홈 화면에 🏠 아이콘이 생겨요.</li>
+      </ol>
+      <p class="hint">다음부터는 홈 화면의 아이콘으로 열어 주세요.</p>
+    <//>`;
+}
+
+// 설치 버튼. banner면 화면 위쪽 띠로, 아니면 큰 버튼으로 보여 준다.
+function InstallApp({ banner = false }) {
+  const prompt = useInstallPrompt();
+  const [guide, setGuide] = useState(false);
+  const [hidden, setHidden] = useState(() => banner && sessionStorage.getItem('install-hide') === '1');
+  const way = installWay(prompt);
+  if (!way || hidden) return null;
+
+  const label = {
+    prompt: '📲 홈 화면에 앱 설치',
+    ios: '📲 홈 화면에 앱 추가하는 방법',
+    kakao: '🌐 크롬에서 열기 (앱 설치하려면)',
+    chrome: '🌐 크롬에서 열기 (앱 설치하려면)',
+  }[way];
+
+  const go = async () => {
+    if (way === 'prompt') {
+      prompt.prompt();
+      const { outcome } = await prompt.userChoice;
+      window.__installPrompt = null;
+      dispatchEvent(new Event('installable'));
+      if (outcome === 'accepted') toast('설치했어요! 홈 화면의 아이콘으로 열어 주세요.');
+    } else if (way === 'ios') {
+      setGuide(true);
+    } else if (way === 'kakao') {
+      location.href = `kakaotalk://web/openExternal?url=${encodeURIComponent(location.href)}`;
+    } else {
+      const u = new URL(location.href);
+      location.href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=com.android.chrome;end`;
+    }
+  };
+  const hide = () => { sessionStorage.setItem('install-hide', '1'); setHidden(true); };
+
+  return html`
+    ${banner
+      ? html`<div class="install-banner">
+          <button class="install-go" onClick=${go}>${label}</button>
+          <button class="install-x" aria-label="닫기" onClick=${hide}>✕</button>
+        </div>`
+      : html`<button class="btn block install-btn" onClick=${go}>${label}</button>`}
+    ${guide && html`<${IosGuide} onClose=${() => setGuide(false)} />`}`;
 }
 
 /* ───────── 로그인 · 가족 연결 ───────── */
@@ -247,6 +332,7 @@ function AccountPicker({ onAdd }) {
           </div>`}
       </div>
       <button class="link" onClick=${() => setEditing(!editing)}>${editing ? '완료' : '이 기기에서 계정 지우기'}</button>
+      <${InstallApp} />
       <${Version} />
       ${picking && html`<${PinCheck} account=${picking} onCancel=${() => { setPicking(null); setAccounts(store.listAccounts()); }} />`}
     </div>`;
@@ -372,6 +458,7 @@ function FirebaseLogin({ onBack }) {
         ${signUp ? '이미 계정이 있어요 → 로그인' : '처음이에요 → 이메일로 가입'}
       </button>
       ${onBack && html`<button class="link block-link" onClick=${onBack}>← 저장된 계정으로 돌아가기</button>`}
+      <${InstallApp} />
       <${Version} />
     </div>`;
 }
@@ -447,7 +534,7 @@ function Shell({ fid, family, me, tabs, tab, setTab, children }) {
       ${menu && html`<${UserMenu} fid=${fid} me=${me} onClose=${() => setMenu(false)} />`}
       ${pinFirst && html`
         <${PinSetup} title="바꾸기 전에 PIN을 정해 주세요" onCancel=${() => setPinFirst(false)} onDone=${() => store.showPicker()} />`}
-      <main>${children}</main>
+      <main><${InstallApp} banner=${true} />${children}</main>
       <nav class="tabs">
         ${tabs.map(([key, label, icon, badge]) => html`
           <button class=${tab === key ? 'on' : ''} onClick=${() => setTab(key)}>

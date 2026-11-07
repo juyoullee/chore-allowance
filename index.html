@@ -17,6 +17,17 @@
   <div id="app"><div class="center"><div class="spinner"></div></div></div>
   <script type="module" src="js/app.js"></script>
   <script>
+    // 크롬이 '앱 설치'를 허락하면 그 신호를 잡아 두었다가 앱 안의 설치 버튼에서 쓴다.
+    window.__installPrompt = null;
+    addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      window.__installPrompt = e;
+      dispatchEvent(new Event('installable'));
+    });
+    addEventListener('appinstalled', () => {
+      window.__installPrompt = null;
+      dispatchEvent(new Event('installable'));
+    });
     if ('serviceWorker' in navigator) {
       // 새 버전이 설치되면 한 번 새로 고친다 (처음 설치할 때는 제외).
       const hadController = Boolean(navigator.serviceWorker.controller);

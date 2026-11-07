@@ -407,3 +407,11 @@ button.card:disabled { opacity: .55; cursor: default; }
 .duty.refused .check { border-color: var(--minus); color: var(--minus); }
 .day-picker { align-items: center; }
 .day-picker input[type="date"] { width: auto; flex: 1; min-width: 140px; padding: 6px 10px; }
+
+/* 홈 화면에 앱 설치 */
+.install-btn { margin-top: 16px; border-color: var(--primary); color: var(--primary-dark); background: var(--primary-soft); font-weight: 600; }
+.install-banner { display: flex; align-items: center; gap: 4px; margin: 8px 0 4px; background: var(--primary-soft); border-radius: 12px; }
+.install-go { flex: 1; text-align: left; padding: 10px 12px; background: none; border: none; color: var(--primary-dark); font: inherit; font-weight: 600; cursor: pointer; }
+.install-x { padding: 10px 12px; background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+.install-steps { padding-left: 20px; line-height: 1.8; }
+@media (prefers-color-scheme: dark) { .install-btn, .install-go { color: var(--primary); } }

@@ -610,6 +610,8 @@ export function errorMessage(e) {
     'auth/email-already-in-use': '이미 가입된 이메일이에요. 로그인해 주세요.',
     'auth/weak-password': '비밀번호는 6자 이상으로 해 주세요.',
     'auth/invalid-email': '이메일 형식이 맞지 않아요.',
+    'auth/missing-email': '이메일을 입력해 주세요.',
+    'auth/too-many-requests': '요청이 너무 많아요. 잠시 뒤에 다시 시도해 주세요.',
     'auth/popup-closed-by-user': '로그인 창이 닫혔어요.',
     'auth/popup-blocked': '팝업이 막혔어요. 이메일로 로그인해 보세요.',
     'auth/unauthorized-domain': '이 주소는 Firebase 승인 도메인에 등록되어 있지 않아요.',

@@ -12,7 +12,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v22 (11/6)';
+const APP_VERSION = 'v23 (11/7)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -323,6 +323,18 @@ function FirebaseLogin({ onBack }) {
     setBusy(false);
   };
 
+  const forgot = async () => {
+    const to = (email.trim() || prompt('가입할 때 쓴 이메일을 입력해 주세요.') || '').trim();
+    if (!to) return;
+    setBusy(true);
+    const ok = await run(() => store.resetPassword(to));
+    setBusy(false);
+    if (ok) alert(`${to} 로 비밀번호 재설정 메일을 보냈어요.
+
+메일의 링크를 눌러 새 비밀번호를 정한 뒤, 여기서 새 비밀번호로 로그인해 주세요.
+메일이 안 보이면 스팸함도 확인해 주세요.`);
+  };
+
   return html`
     <div class="auth">
       <div class="logo">🏠</div>
@@ -338,6 +350,7 @@ function FirebaseLogin({ onBack }) {
           value=${pw} onInput=${(e) => setPw(e.target.value)} />
         <button class="btn primary block" disabled=${busy}>${signUp ? '가입하기' : '로그인'}</button>
       </form>
+      ${!signUp && html`<button class="link" disabled=${busy} onClick=${forgot}>비밀번호를 잊었어요</button>`}
       <button class="link" onClick=${() => setSignUp(!signUp)}>
         ${signUp ? '이미 계정이 있어요 → 로그인' : '처음이에요 → 이메일로 가입'}
       </button>

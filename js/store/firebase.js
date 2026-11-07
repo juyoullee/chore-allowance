@@ -6,7 +6,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup,
-  signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
+  signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, doc, collection, query, orderBy, limit,
@@ -147,6 +147,8 @@ export default {
   signInGoogle: () => signInNew((auth) => signInWithPopup(auth, new GoogleAuthProvider())),
   signInEmail: (email, pw) => signInNew((auth) => signInWithEmailAndPassword(auth, email, pw)),
   signUpEmail: (email, pw) => signInNew((auth) => createUserWithEmailAndPassword(auth, email, pw)),
+  // 비밀번호 재설정 메일을 보낸다 (메일의 링크에서 새 비밀번호를 정한다).
+  resetPassword: (email) => { const auth = inst(DEFAULT_SLOT).auth; auth.languageCode = 'ko'; return sendPasswordResetEmail(auth, email); },
 
   // 이 기기에서 지금 계정을 완전히 로그아웃한다 (다시 쓰려면 비밀번호 필요).
   async signOut() {

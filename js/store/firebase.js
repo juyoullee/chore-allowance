@@ -9,7 +9,7 @@ import {
   signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
-  initializeFirestore, persistentLocalCache, doc, collection, query, orderBy, limit,
+  initializeFirestore, persistentLocalCache, doc, collection, query, where, orderBy, limit, getDocs,
   onSnapshot, getDoc, setDoc, addDoc, updateDoc, deleteDoc, writeBatch, runTransaction, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { firebaseConfig } from '../config.js';
@@ -242,6 +242,19 @@ export default {
   },
 
   updateMember: (fid, uid, patch) => updateDoc(famRef(fid, 'members', uid), patch),
+  // 부모가 자녀를 가족에서 내보낸다. 그 자녀의 요청·기록도 모두 지운다 (되돌릴 수 없음).
+  async removeChild(fid, childId) {
+    const db = D();
+    const snap = await getDocs(query(famCol(fid, 'requests'), where('childId', '==', childId)));
+    for (let i = 0; i < snap.docs.length; i += 400) {
+      const b = writeBatch(db);
+      snap.docs.slice(i, i + 400).forEach((d) => b.delete(d.ref));
+      await b.commit();
+    }
+    await deleteDoc(famRef(fid, 'members', childId));
+  },
+  // 가족에서 빠진 계정이 다른 가족(또는 같은 가족)에 다시 참여할 수 있게 연결을 끊는다.
+  leaveFamily: () => setDoc(doc(D(), 'users', A().currentUser.uid), { familyId: null }),
   updateFamily: (fid, patch) => updateDoc(famRef(fid), patch),
 
   // 부모가 차감·집안일 봉사 같은 기록을 남긴다. make(member)가 { patch, record }를 돌려준다.

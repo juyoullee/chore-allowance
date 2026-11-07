@@ -133,6 +133,13 @@ export default {
     Object.assign(fam(fid).members[uid], patch);
     save();
   },
+  async removeChild(fid, childId) {
+    const f = fam(fid);
+    for (const [id, r] of Object.entries(f.requests)) if (r.childId === childId) delete f.requests[id];
+    delete f.members[childId];
+    save();
+  },
+  leaveFamily: unsupported,
   async updateFamily(fid, patch) {
     Object.assign(fam(fid), patch);
     save();

@@ -12,7 +12,7 @@ import {
 const store = (await import(isConfigured ? './store/firebase.js' : './store/demo.js')).default;
 
 // 화면에 보여 주는 버전. 올릴 때 sw.js의 CACHE 버전과 함께 바꾼다.
-const APP_VERSION = 'v24 (11/7)';
+const APP_VERSION = 'v25 (11/7)';
 const Version = () => html`<p class="version">집안일 용돈 ${APP_VERSION}</p>`;
 
 /* ───────── 공통 도우미 ───────── */
@@ -948,6 +948,16 @@ function FamilyTab({ fid, family, members, requests, chores }) {
   const [renameFamily, setRenameFamily] = useState(false);
 
   const copy = (code) => run(() => navigator.clipboard.writeText(code), '코드를 복사했어요.');
+  const removeChild = async (c) => {
+    if (!confirm(`${c.name}을(를) 가족에서 삭제할까요?
+
+${c.name}의 집안일 기록, 요청, 모은 용돈(${won(c.balance)})이 모두 지워지고 되돌릴 수 없어요.`)) return;
+    if (prompt(`정말 삭제하려면 아래 칸에 ${c.name} 이름을 똑같이 입력해 주세요.`)?.trim() !== c.name.trim()) {
+      toast('이름이 달라서 삭제하지 않았어요.');
+      return;
+    }
+    run(() => store.removeChild(fid, c.id), `${c.name}을(를) 가족에서 삭제했어요.`);
+  };
   const regen = (role) => {
     if (!confirm('새 코드를 만들면 지금 코드는 더 이상 쓸 수 없어요. 계속할까요?')) return;
     run(() => store.regenerateCode(family, role), '새 코드를 만들었어요.');
@@ -990,6 +1000,9 @@ function FamilyTab({ fid, family, members, requests, chores }) {
           </div>
           <div class="actions one">
             <button class="btn small" onClick=${() => setDutyFor(c)}>✅ 기본 할 일 확인 · 지난 날 등록</button>
+          </div>
+          <div class="actions one">
+            <button class="btn small danger-ghost" onClick=${() => removeChild(c)}>🗑️ 이 자녀 삭제</button>
           </div>
           ${openAdvances(requests, c.id, c.debt).map((r) => html`
             <div class="row-item advance-row" key=${r.id}>
@@ -2334,7 +2347,12 @@ function FamilyApp({ user, fid }) {
   if (!family || !members || !chores || !requests) return html`<${Loading} />`;
   if (!me) {
     return html`<div class="auth"><p>가족 정보를 찾을 수 없어요.</p>
-      <button class="btn" onClick=${() => store.signOut()}>나가기</button></div>`;
+      <p class="muted small">부모님이 가족에서 삭제했을 수 있어요. 초대 코드를 받으면 다시 참여할 수 있어요.</p>
+      <div class="stack">
+        ${store.leaveFamily && store.mode !== 'demo' && html`
+          <button class="btn primary block" onClick=${() => run(() => store.leaveFamily())}>초대 코드로 다시 참여하기</button>`}
+        <button class="btn block" onClick=${() => store.signOut()}>나가기</button>
+      </div></div>`;
   }
   const ctx = { fid, family, members, chores, requests, me };
   return me.role === 'parent' ? html`<${ParentApp} ...${ctx} />` : html`<${ChildApp} ...${ctx} />`;
